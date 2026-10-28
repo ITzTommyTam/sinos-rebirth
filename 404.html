@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>THPT QT-Tin THPT — Ôn Thi THPT & ĐGNL (Python, HTML, SQL)</title>
+    <meta name="description" content="THPT QT-Tin THPT: Hệ thống ôn luyện lập trình Python, HTML/Web và SQL chuẩn cấu trúc thi Tốt nghiệp THPT 2025 của Bộ GD&ĐT, kết hợp kho bài tập vô hạn từ Genopy, HackerRank và đề thi ĐGNL." />
+    <meta property="og:title" content="THPT QT-Tin THPT — Ôn Thi THPT & ĐGNL (Python, HTML, SQL)" />
+    <meta property="og:description" content="THPT QT-Tin THPT: Hệ thống ôn luyện lập trình Python, HTML/Web và SQL chuẩn cấu trúc thi Tốt nghiệp THPT 2025 của Bộ GD&ĐT, kết hợp kho bài tập vô hạn từ Genopy, HackerRank và đề thi ĐGNL." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./src/main.tsx"></script>
+    <script>
+      (function () {
+        var isViteDev = !!document.querySelector('script[src*="@vite/client"]');
+        var isViteBuild = !!document.querySelector('script[src*="assets/index-"]');
+        var rawEntry = document.querySelector('script[src*="src/main.tsx"]');
+        if (!isViteDev && !isViteBuild && rawEntry) {
+          rawEntry.remove();
+          var link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = './static-build/app.css';
+          document.head.appendChild(link);
+
+          var script = document.createElement('script');
+          script.type = 'module';
+          script.src = './static-build/app.js';
+          document.body.appendChild(script);
+        }
+      })();
+    </script>
+  </body>
+</html>

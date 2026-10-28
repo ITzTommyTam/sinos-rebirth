@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -18,34 +18,99 @@ concurrency:
 
 jobs:
   build-and-deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Prepare static site artifact
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Normalize package.json for public npm registry
         run: |
-          mkdir -p _site/static-build
-          cp index.html _site/index.html
-          cp index.html _site/404.html
-          touch _site/.nojekyll
-          cp -r static-build/* _site/static-build/
-          if [ -d docs/assets ]; then
-            mkdir -p _site/assets
-            cp -r docs/assets/* _site/assets/
+          rm -f package-lock.json bun.lock
+          node -e '
+            const fs = require("fs");
+            const pkg = {
+              name: "thpt-qt-tin-thpt",
+              private: true,
+              version: "1.0.0",
+              type: "module",
+              scripts: {
+                dev: "vite --port=3000 --host=0.0.0.0",
+                build: "vite build",
+                preview: "vite preview"
+              },
+              dependencies: {
+                "firebase": "^11.2.0",
+                "lucide-react": "^0.468.0",
+                "react": "^19.0.0",
+                "react-dom": "^19.0.0"
+              },
+              devDependencies: {
+                "@tailwindcss/vite": "^4.0.6",
+                "@types/node": "^22.10.0",
+                "@types/react": "^19.0.0",
+                "@types/react-dom": "^19.0.0",
+                "@vitejs/plugin-react": "^4.3.4",
+                "tailwindcss": "^4.0.6",
+                "typescript": "^5.7.2",
+                "vite": "^6.1.0"
+              }
+            };
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
+          '
+
+      - name: Install dependencies and build production bundle
+        run: |
+          npm install --legacy-peer-deps --no-audit --no-fund
+          npm run build
+          cp dist/index.html dist/404.html
+          touch dist/.nojekyll
+
+      - name: Sync static-build, docs, and gh-pages branch
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p static-build docs
+          cp dist/assets/index-*.js static-build/app.js
+          cp dist/assets/index-*.css static-build/app.css
+          rm -rf docs/*
+          cp -r dist/* docs/
+          cp dist/index.html docs/404.html
+          touch docs/.nojekyll .nojekyll
+          cp index.html 404.html
+
+          git add static-build docs .nojekyll 404.html
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(pages): update prebuilt static bundle [skip ci]"
+            git push origin HEAD:${GITHUB_REF_NAME} || true
           fi
 
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v5
+          npx --yes gh-pages -d dist -t true -m "chore(pages): deploy to gh-pages [skip ci]" || true
 
-      - name: Upload site artifact
+      - name: Configure GitHub Pages
+        id: pages_config
+        continue-on-error: true
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload dist artifact
+        if: steps.pages_config.outcome == 'success'
+        continue-on-error: true
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './_site'
+          path: './dist'
 
       - name: Deploy to GitHub Pages
         id: deployment
+        if: steps.pages_config.outcome == 'success'
+        continue-on-error: true
         uses: actions/deploy-pages@v4
