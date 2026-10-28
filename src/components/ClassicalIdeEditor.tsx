@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import Editor, { OnMount } from '@monaco-editor/react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -15,9 +16,9 @@ import {
 } from '../types/academic';
 import {
   analyzeSyntax,
+  getAutocompleteSuggestions,
   getLiveCommandOutput,
 } from '../utils/codeEngine';
-import { tokenizeCodeLine } from './SyntaxHighlightedCode';
 
 interface ClassicalIdeEditorProps {
   problem: Problem;
@@ -34,6 +35,12 @@ const LANGUAGE_LABELS: Record<Language, string> = {
   sql: 'SQL',
 };
 
+const MONACO_LANGUAGE_MAP: Record<Language, string> = {
+  python: 'python',
+  html: 'html',
+  sql: 'sql',
+};
+
 export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
   problem,
   code,
@@ -41,17 +48,14 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
   onRunAndGrade,
   onResetStarter,
 }) => {
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const highlightRef = useRef<HTMLPreElement | null>(null);
-  const measureSpanRef = useRef<HTMLSpanElement | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const monacoEditorRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const monacoInstanceRef = useRef<any>(null);
+  const runCallbackRef = useRef(onRunAndGrade);
+  runCallbackRef.current = onRunAndGrade;
 
   const [cursorOffset, setCursorOffset] = useState<number>(code.length);
-  const [scrollPos, setScrollPos] = useState<{ top: number; left: number }>({
-    top: 0,
-    left: 0,
-  });
-  const [caretX, setCaretX] = useState<number>(14);
-  const [isTypingActive, setIsTypingActive] = useState<boolean>(false);
 
   const diagnostics: SyntaxDiagnostic[] = useMemo(
     () => analyzeSyntax(code, problem.language),
@@ -63,78 +67,93 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
     [problem, code, cursorOffset]
   );
 
-  const lines = code ? code.split('\n') : [''];
+  const lines = useMemo(() => (code ? code.split('\n') : ['']), [code]);
 
-  const { activeLineIndex, currentLineBeforeCursor } = useMemo(() => {
-    const safeOffset = Math.min(Math.max(0, cursorOffset), code.length);
-    const before = code.slice(0, safeOffset);
-    const splitLines = before.split('\n');
-    const rowIdx = Math.max(0, splitLines.length - 1);
-    const linePrefix = splitLines[rowIdx] ?? '';
-    return {
-      activeLineIndex: rowIdx,
-      currentLineBeforeCursor: linePrefix,
-    };
-  }, [code, cursorOffset]);
-
+  // Sync syntax diagnostics into Visual Studio Code (Monaco) squiggly underlines
   useEffect(() => {
-    if (measureSpanRef.current) {
-      const width = measureSpanRef.current.getBoundingClientRect().width;
-      setCaretX(Math.max(14, Math.round(14 + width - scrollPos.left)));
-    } else {
-      setCaretX(Math.max(14, Math.round(14 + currentLineBeforeCursor.length * 9.2 - scrollPos.left)));
-    }
-  }, [currentLineBeforeCursor, scrollPos.left, problem.id]);
+    const monaco = monacoInstanceRef.current;
+    const editor = monacoEditorRef.current;
+    if (!monaco || !editor) return;
+    const model = editor.getModel();
+    if (!model) return;
 
-  useEffect(() => {
-    if (!isTypingActive) return;
-    const timer = window.setTimeout(() => {
-      setIsTypingActive(false);
-    }, 450);
-    return () => window.clearTimeout(timer);
-  }, [isTypingActive, code, cursorOffset]);
+    const markers = diagnostics.map((d) => ({
+      startLineNumber: Math.max(1, d.line),
+      startColumn: Math.max(1, d.column || 1),
+      endLineNumber: Math.max(1, d.line),
+      endColumn: Math.max(2, (lines[d.line - 1]?.length || 10) + 1),
+      message: `${d.message}${d.suggestion ? `\nGợi ý: ${d.suggestion}` : ''}`,
+      severity:
+        d.severity === 'error'
+          ? monaco.MarkerSeverity.Error
+          : monaco.MarkerSeverity.Warning,
+    }));
 
-  const caretY = Math.max(6, Math.round(17 + activeLineIndex * 28 - scrollPos.top));
-  const activeLineY = Math.max(0, Math.round(14 + activeLineIndex * 28 - scrollPos.top));
+    monaco.editor.setModelMarkers(model, 'vscode-syntax-Diagnostics', markers);
+  }, [diagnostics, lines, problem.language]);
 
-  const errorLinesMap = useMemo(() => {
-    const map = new Map<number, SyntaxDiagnostic>();
-    for (const d of diagnostics) {
-      if (!map.has(d.line) || d.severity === 'error') {
-        map.set(d.line, d);
+  const handleEditorDidMount: OnMount = (editor, monaco) => {
+    monacoEditorRef.current = editor;
+    monacoInstanceRef.current = monaco;
+
+    // Bind Ctrl + Enter / Cmd + Enter to Run & Grade inside VS Code editor
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+      runCallbackRef.current();
+    });
+
+    // Make Tab key strictly indent/outdent (never accept autocomplete suggestions)
+    editor.onKeyDown((e) => {
+      if (e.keyCode === monaco.KeyCode.Tab && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        editor.trigger('keyboard', 'hideSuggestWidget', {});
+        editor.trigger('keyboard', e.shiftKey ? 'outdent' : 'tab', {});
       }
-    }
-    return map;
-  }, [diagnostics]);
+    });
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Tab') {
-      e.preventDefault();
-      const textarea = e.currentTarget;
-      const start = textarea.selectionStart;
-      const end = textarea.selectionEnd;
-      const next = code.slice(0, start) + '    ' + code.slice(end);
-      onChangeCode(next);
-      setIsTypingActive(true);
-      requestAnimationFrame(() => {
-        if (textareaRef.current) {
-          textareaRef.current.setSelectionRange(start + 4, start + 4);
-          setCursorOffset(start + 4);
-        }
+    // Update cursor offset for the live statement output bar
+    editor.onDidChangeCursorPosition((e) => {
+      const model = editor.getModel();
+      if (model) {
+        setCursorOffset(model.getOffsetAt(e.position));
+      }
+    });
+
+    // Register atomic keyword suggestions (SELECT, INNER, FROM, def, print, etc.) once per Monaco instance
+    const monacoWithFlag = monaco as unknown as { __atomicProvidersRegistered?: boolean };
+    if (!monacoWithFlag.__atomicProvidersRegistered) {
+      monacoWithFlag.__atomicProvidersRegistered = true;
+      (['python', 'html', 'sql'] as const).forEach((lang) => {
+        monaco.languages.registerCompletionItemProvider(lang, {
+          provideCompletionItems: (model, position) => {
+            const word = model.getWordUntilPosition(position);
+            if (!word.word) {
+              return { suggestions: [] };
+            }
+            const fullText = model.getValue();
+            const offset = model.getOffsetAt(position);
+            const items = getAutocompleteSuggestions(fullText, offset, lang);
+            const range = {
+              startLineNumber: position.lineNumber,
+              endLineNumber: position.lineNumber,
+              startColumn: word.startColumn,
+              endColumn: word.endColumn,
+            };
+            return {
+              suggestions: items.map((s) => ({
+                label: s.label,
+                kind:
+                  s.kind === 'function'
+                    ? monaco.languages.CompletionItemKind.Function
+                    : monaco.languages.CompletionItemKind.Keyword,
+                insertText: s.insertText,
+                detail: s.detail,
+                range,
+              })),
+            };
+          },
+        });
       });
-    } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      onRunAndGrade();
-    }
-  };
-
-  const handleScrollSync = (e: React.UIEvent<HTMLTextAreaElement>) => {
-    const top = e.currentTarget.scrollTop;
-    const left = e.currentTarget.scrollLeft;
-    setScrollPos({ top, left });
-    if (highlightRef.current) {
-      highlightRef.current.scrollTop = top;
-      highlightRef.current.scrollLeft = left;
     }
   };
 
@@ -143,7 +162,7 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
 
   return (
     <div className="flex flex-col border-2 border-zinc-900 bg-zinc-950 text-white rounded-none overflow-hidden min-w-0">
-      {/* Editor Top Utility Strip — Clean Language Label & Essential Run/Clear Controls */}
+      {/* Editor Top Utility Strip — Original UI Shell */}
       <div className="flex flex-wrap items-center justify-between gap-2.5 px-3 sm:px-4 py-2.5 sm:py-3 bg-black border-b border-zinc-800">
         <div className="flex items-center gap-2 text-sm sm:text-base text-zinc-300 shrink-0">
           <Code2 className="w-4 h-4 text-sky-400 shrink-0" />
@@ -161,6 +180,9 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
             onClick={() => {
               onResetStarter();
               setCursorOffset(0);
+              if (monacoEditorRef.current) {
+                monacoEditorRef.current.setValue('');
+              }
             }}
             className="px-3 py-1.5 text-xs font-medium text-zinc-200 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
           >
@@ -179,129 +201,89 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
         </div>
       </div>
 
-      {/* Code Editing Surface with Line Numbers, Color Syntax Highlighting & Smooth Sliding Caret */}
-      <div className="relative flex min-h-[290px] max-h-[450px] overflow-y-auto bg-zinc-950">
-        {/* Hidden Monospace Measurement Span for Exact Sliding Caret Coordinates */}
-        <span
-          ref={measureSpanRef}
-          aria-hidden="true"
-          className="pointer-events-none invisible fixed top-0 left-0 font-mono-tabular text-[15px] sm:text-base whitespace-pre select-none"
-        >
-          {currentLineBeforeCursor}
-        </span>
+      {/* Code Editing Surface — Visual Studio Code (Monaco Editor vs-dark) */}
+      <div className="relative w-full h-[340px] sm:h-[380px] bg-[#1e1e1e]">
+        <Editor
+          height="100%"
+          language={MONACO_LANGUAGE_MAP[problem.language]}
+          theme="vs-dark"
+          value={code}
+          onMount={handleEditorDidMount}
+          onChange={(val) => {
+            const next = val ?? '';
+            onChangeCode(next);
+          }}
+          options={{
+            fontSize: 15,
+            lineHeight: 24,
+            fontFamily:
+              "'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace",
+            fontLigatures: true,
+            cursorBlinking: 'smooth',
+            cursorSmoothCaretAnimation: 'on',
+            smoothScrolling: true,
+            minimap: { enabled: true },
+            wordWrap: 'on',
+            scrollBeyondLastLine: false,
+            automaticLayout: true,
+            padding: { top: 12, bottom: 12 },
+            bracketPairColorization: { enabled: true },
+            guides: {
+              bracketPairs: true,
+              indentation: true,
+            },
+            renderLineHighlight: 'all',
+            tabCompletion: 'off',
+            acceptSuggestionOnCommitCharacter: false,
+            acceptSuggestionOnEnter: 'on',
+            snippetSuggestions: 'none',
+            wordBasedSuggestions: 'off',
+            suggestOnTriggerCharacters: false,
+            quickSuggestions: {
+              other: true,
+              comments: false,
+              strings: false,
+            },
+            suggest: {
+              showSnippets: false,
+              showWords: false,
+              showKeywords: true,
+              showFunctions: true,
+            },
+            tabSize: 4,
+            insertSpaces: true,
+            formatOnPaste: true,
+            formatOnType: true,
+          }}
+          loading={
+            <div className="flex items-center justify-center h-full bg-[#1e1e1e] text-xs font-mono text-zinc-400">
+              Đang tải trình soạn thảo Visual Studio Code...
+            </div>
+          }
+        />
 
-        {/* Line Numbers Gutter */}
-        <div
-          aria-hidden="true"
-          className="select-none py-3.5 px-2.5 bg-black border-r border-zinc-800 text-right font-mono-tabular text-sm leading-7 text-zinc-500 min-w-[48px] shrink-0 z-10"
-        >
-          {lines.map((_, i) => {
-            const lineNum = i + 1;
-            const diag = errorLinesMap.get(lineNum);
-            const isCurrentLine = i === activeLineIndex;
-            return (
-              <div
-                key={lineNum}
-                className={`px-1 flex items-center justify-end gap-1 transition-colors ${
-                  diag?.severity === 'error'
-                    ? 'text-white font-bold bg-red-600'
-                    : diag?.severity === 'warning'
-                      ? 'text-black font-bold bg-amber-300'
-                      : isCurrentLine
-                        ? 'text-sky-400 font-bold'
-                        : ''
-                }`}
-                title={diag ? `${diag.message} (${diag.suggestion})` : undefined}
-              >
-                {diag && (
-                  <span className="text-[10px]">
-                    {diag.severity === 'error' ? '!' : '?'}
-                  </span>
-                )}
-                <span>{lineNum}</span>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Synchronized Color Syntax Highlight Backdrop + Smooth Sliding Caret Overlay + Editable Textarea */}
-        <div className="relative flex-1 min-w-0 overflow-hidden">
-          {/* SVG Overlay for Smooth Sliding Active Line & Smooth Sliding Blinking Caret Bar */}
-          <svg
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 w-full h-full z-20 overflow-hidden"
-          >
-            <rect
-              x="0"
-              y={activeLineY}
-              width="100%"
-              height="28"
-              className="fill-sky-500/10 smooth-sliding-line"
-            />
-            <rect
-              data-testid="sliding-editor-caret"
-              x={caretX}
-              y={caretY}
-              width="2.5"
-              height="21"
-              rx="1"
-              className={`fill-sky-400 smooth-sliding-caret ${
-                isTypingActive ? 'opacity-100' : 'animate-caret-blink'
-              }`}
-            />
-          </svg>
-
-          <pre
-            ref={highlightRef}
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 m-0 p-3.5 font-mono-tabular text-[15px] sm:text-base leading-7 whitespace-pre overflow-hidden select-none z-10"
-          >
-            {code ? (
-              lines.map((line, lIdx) => {
-                const tokens = tokenizeCodeLine(line, problem.language);
-                return (
-                  <div key={lIdx} className="min-h-[1.75rem]">
-                    {tokens.map((tok, tIdx) => (
-                      <span key={tIdx} className={tok.className}>
-                        {tok.text}
-                      </span>
-                    ))}
-                  </div>
-                );
-              })
-            ) : (
-              <span className="text-zinc-600 whitespace-normal block text-sm sm:text-[15px] pl-1">
-                {`Nhập mã nguồn ${LANGUAGE_LABELS[problem.language]} của bạn tại đây...`}
-              </span>
-            )}
-          </pre>
-
-          <textarea
-            ref={textareaRef}
-            data-testid="code-editor-textarea"
-            aria-label={`Trình soạn thảo mã ${LANGUAGE_LABELS[problem.language]}`}
-            value={code}
-            wrap="off"
-            onChange={(e) => {
-              onChangeCode(e.target.value);
-              setCursorOffset(e.target.selectionStart ?? e.target.value.length);
-              setIsTypingActive(true);
-            }}
-            onScroll={handleScrollSync}
-            onClick={(e) => setCursorOffset(e.currentTarget.selectionStart ?? 0)}
-            onKeyUp={(e) => setCursorOffset(e.currentTarget.selectionStart ?? 0)}
-            onSelect={(e) => setCursorOffset(e.currentTarget.selectionStart ?? 0)}
-            onKeyDown={handleKeyDown}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoComplete="off"
-            className="code-input relative z-30 w-full p-3.5 bg-transparent text-transparent caret-transparent selection:bg-sky-500/30 font-mono-tabular text-[15px] sm:text-base leading-7 whitespace-pre focus:outline-none resize-none overflow-x-auto"
-            rows={Math.max(11, lines.length + 2)}
-          />
-        </div>
+        {/* Synchronized hidden textarea for accessibility & instant state sync */}
+        <textarea
+          data-testid="code-editor-textarea"
+          aria-label={`Trình soạn thảo mã ${LANGUAGE_LABELS[problem.language]}`}
+          value={code}
+          onChange={(e) => {
+            const next = e.target.value;
+            onChangeCode(next);
+            setCursorOffset(e.target.selectionStart ?? next.length);
+            if (
+              monacoEditorRef.current &&
+              monacoEditorRef.current.getValue() !== next
+            ) {
+              monacoEditorRef.current.setValue(next);
+            }
+          }}
+          className="sr-only"
+          tabIndex={-1}
+        />
       </div>
 
-      {/* Dedicated Live Current Statement Output Bar */}
+      {/* Dedicated Live Current Statement Output Bar — Original UI Shell */}
       <div
         data-testid="live-output-bar"
         className="px-3.5 sm:px-4 py-2.5 bg-zinc-900 border-t border-zinc-700 text-xs sm:text-sm font-mono-tabular flex flex-col sm:flex-row sm:items-center justify-between gap-2 min-w-0"
@@ -321,7 +303,7 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
         </div>
       </div>
 
-      {/* Real-time Syntax & Linter Status Footer (Gentle Hint Shown Only When Error Occurs) */}
+      {/* Real-time Syntax & Linter Status Footer — Original UI Shell */}
       <div className="px-4 py-2.5 bg-black border-t border-zinc-800 text-xs sm:text-sm">
         {diagnostics.length === 0 ? (
           <div className="flex items-center justify-between text-white gap-2">

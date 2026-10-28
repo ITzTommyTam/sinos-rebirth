@@ -9,57 +9,101 @@ import {
   TestCaseResult,
 } from '../types/academic';
 
+// Prevent browser native window.print() (macOS/Windows Print Dialog) from ever being triggered by user Python print() code
+if (typeof window !== 'undefined') {
+  window.print = () => {};
+}
+
 const PYTHON_SUGGESTIONS: AutocompleteSuggestion[] = [
-  { label: 'def ten_ham(tham_so):', insertText: 'def ten_ham(n):\n    return n', kind: 'snippet', detail: 'Khai báo hàm Python (Chủ đề F Lớp 10)' },
-  { label: 'for i in range(n):', insertText: 'for i in range(n):\n    ', kind: 'snippet', detail: 'Vòng lặp for với range()' },
-  { label: 'while dieu_kien:', insertText: 'while n > 0:\n    ', kind: 'snippet', detail: 'Vòng lặp while có điều kiện' },
-  { label: 'if ... elif ... else:', insertText: 'if dieu_kien:\n    pass\nelse:\n    pass', kind: 'snippet', detail: 'Cấu trúc rẽ nhánh' },
-  { label: 'input().strip()', insertText: 'input().strip()', kind: 'function', detail: 'Đọc 1 dòng dữ liệu chuẩn từ bàn phím' },
-  { label: 'map(int, input().split())', insertText: 'map(int, input().split())', kind: 'snippet', detail: 'Đọc nhiều số nguyên trên 1 dòng' },
-  { label: 'list(map(int, input().split()))', insertText: 'list(map(int, input().split()))', kind: 'snippet', detail: 'Đọc danh sách số nguyên (HackerRank / Bộ GD&ĐT)' },
-  { label: 'print()', insertText: 'print()', kind: 'function', detail: 'Xuất kết quả ra màn hình chuẩn' },
-  { label: 'range(start, stop, step)', insertText: 'range(', kind: 'function', detail: 'Tạo dãy số nguyên lặp' },
-  { label: 'len(danh_sach)', insertText: 'len(', kind: 'function', detail: 'Trả về độ dài danh sách hoặc xâu' },
-  { label: 'sum(danh_sach)', insertText: 'sum(', kind: 'function', detail: 'Tính tổng các phần tử trong danh sách' },
-  { label: 'max(danh_sach)', insertText: 'max(', kind: 'function', detail: 'Tìm giá trị lớn nhất' },
-  { label: 'min(danh_sach)', insertText: 'min(', kind: 'function', detail: 'Tìm giá trị nhỏ nhất' },
-  { label: 'sorted(danh_sach)', insertText: 'sorted(', kind: 'function', detail: 'Sắp xếp danh sách tăng dần' },
-  { label: 'append(phan_tu)', insertText: 'append(', kind: 'function', detail: 'Thêm phần tử vào cuối list' },
-  { label: 'return', insertText: 'return ', kind: 'keyword', detail: 'Trả về giá trị từ hàm' },
+  { label: 'def', insertText: 'def ', kind: 'keyword', detail: 'Từ khóa khai báo hàm' },
+  { label: 'for', insertText: 'for ', kind: 'keyword', detail: 'Từ khóa vòng lặp for' },
+  { label: 'while', insertText: 'while ', kind: 'keyword', detail: 'Từ khóa vòng lặp while' },
+  { label: 'if', insertText: 'if ', kind: 'keyword', detail: 'Từ khóa điều kiện if' },
+  { label: 'elif', insertText: 'elif ', kind: 'keyword', detail: 'Từ khóa nhánh elif' },
+  { label: 'else', insertText: 'else:', kind: 'keyword', detail: 'Từ khóa nhánh else' },
+  { label: 'return', insertText: 'return ', kind: 'keyword', detail: 'Từ khóa trả về giá trị' },
+  { label: 'in', insertText: 'in ', kind: 'keyword', detail: 'Toán tử kiểm tra / duyệt phần tử' },
+  { label: 'and', insertText: 'and ', kind: 'keyword', detail: 'Toán tử logic VÀ' },
+  { label: 'or', insertText: 'or ', kind: 'keyword', detail: 'Toán tử logic HOẶC' },
+  { label: 'not', insertText: 'not ', kind: 'keyword', detail: 'Toán tử phủ định' },
+  { label: 'True', insertText: 'True', kind: 'keyword', detail: 'Giá trị logic đúng' },
+  { label: 'False', insertText: 'False', kind: 'keyword', detail: 'Giá trị logic sai' },
+  { label: 'print', insertText: 'print', kind: 'function', detail: 'Hàm in kết quả chuẩn' },
+  { label: 'input', insertText: 'input', kind: 'function', detail: 'Hàm đọc dữ liệu đầu vào' },
+  { label: 'range', insertText: 'range', kind: 'function', detail: 'Hàm tạo dãy số lặp' },
+  { label: 'len', insertText: 'len', kind: 'function', detail: 'Hàm lấy độ dài' },
+  { label: 'sum', insertText: 'sum', kind: 'function', detail: 'Hàm tính tổng' },
+  { label: 'max', insertText: 'max', kind: 'function', detail: 'Hàm tìm giá trị lớn nhất' },
+  { label: 'min', insertText: 'min', kind: 'function', detail: 'Hàm tìm giá trị nhỏ nhất' },
+  { label: 'sorted', insertText: 'sorted', kind: 'function', detail: 'Hàm sắp xếp danh sách' },
+  { label: 'int', insertText: 'int', kind: 'function', detail: 'Ép kiểu số nguyên' },
+  { label: 'float', insertText: 'float', kind: 'function', detail: 'Ép kiểu số thực' },
+  { label: 'str', insertText: 'str', kind: 'function', detail: 'Ép kiểu chuỗi ký tự' },
+  { label: 'list', insertText: 'list', kind: 'function', detail: 'Khởi tạo danh sách' },
+  { label: 'map', insertText: 'map', kind: 'function', detail: 'Ánh xạ hàm lên danh sách' },
+  { label: 'append', insertText: 'append', kind: 'function', detail: 'Phương thức thêm phần tử cuối list' },
+  { label: 'split', insertText: 'split', kind: 'function', detail: 'Phương thức tách chuỗi' },
+  { label: 'strip', insertText: 'strip', kind: 'function', detail: 'Phương thức cắt khoảng trắng' },
 ];
 
 const HTML_SUGGESTIONS: AutocompleteSuggestion[] = [
-  { label: '<table>...</table>', insertText: '<table border="1">\n  <thead>\n    <tr>\n      <th>Cột 1</th>\n      <th>Cột 2</th>\n    </tr>\n  </thead>\n  <tbody>\n    <tr>\n      <td>Dữ liệu 1</td>\n      <td>Dữ liệu 2</td>\n    </tr>\n  </tbody>\n</table>', kind: 'snippet', detail: 'Bảng biểu dữ liệu chuẩn HTML5 (Lớp 12)' },
-  { label: '<form>...</form>', insertText: '<form action="#" method="post">\n  <label for="ho_ten">Họ và tên:</label>\n  <input type="text" id="ho_ten" name="ho_ten" required />\n  <button type="submit">Gửi đăng ký</button>\n</form>', kind: 'snippet', detail: 'Biểu mẫu thu thập thông tin' },
-  { label: '<input type="text" />', insertText: '<input type="text" id="" name="" placeholder="" />', kind: 'tag', detail: 'Ô nhập văn bản trong biểu mẫu' },
-  { label: '<label for="...">', insertText: '<label for="">Nhãn:</label>', kind: 'tag', detail: 'Nhãn gắn kết với điều khiển form' },
-  { label: '<select>...</select>', insertText: '<select id="khoi_thi" name="khoi_thi">\n  <option value="CS">Khoa học máy tính</option>\n  <option value="ICT">Tin học ứng dụng</option>\n</select>', kind: 'snippet', detail: 'Danh sách thả xuống lựa chọn' },
-  { label: '<ul><li>...</li></ul>', insertText: '<ul>\n  <li>Mục 1</li>\n  <li>Mục 2</li>\n</ul>', kind: 'snippet', detail: 'Danh sách không thứ tự' },
-  { label: '<ol><li>...</li></ol>', insertText: '<ol>\n  <li>Bước 1</li>\n  <li>Bước 2</li>\n</ol>', kind: 'snippet', detail: 'Danh sách có thứ tự' },
-  { label: '<style>...</style>', insertText: '<style>\n  table {\n    border-collapse: collapse;\n    width: 100%;\n  }\n</style>', kind: 'snippet', detail: 'Định dạng CSS nội tuyến (Lớp 12)' },
-  { label: '<h1>...</h1>', insertText: '<h1>Tiêu đề chính</h1>', kind: 'tag', detail: 'Tiêu đề cấp 1 của trang web' },
-  { label: '<a href="...">', insertText: '<a href="https://moet.gov.vn" target="_blank">Liên kết</a>', kind: 'tag', detail: 'Siêu liên kết văn bản' },
+  { label: 'table', insertText: 'table', kind: 'tag', detail: 'Thẻ bảng dữ liệu HTML' },
+  { label: 'thead', insertText: 'thead', kind: 'tag', detail: 'Phần đầu bảng' },
+  { label: 'tbody', insertText: 'tbody', kind: 'tag', detail: 'Phần thân bảng' },
+  { label: 'tr', insertText: 'tr', kind: 'tag', detail: 'Hàng trong bảng' },
+  { label: 'th', insertText: 'th', kind: 'tag', detail: 'Ô tiêu đề bảng' },
+  { label: 'td', insertText: 'td', kind: 'tag', detail: 'Ô dữ liệu bảng' },
+  { label: 'form', insertText: 'form', kind: 'tag', detail: 'Thẻ biểu mẫu HTML' },
+  { label: 'input', insertText: 'input', kind: 'tag', detail: 'Thẻ ô nhập liệu' },
+  { label: 'label', insertText: 'label', kind: 'tag', detail: 'Thẻ nhãn biểu mẫu' },
+  { label: 'select', insertText: 'select', kind: 'tag', detail: 'Danh sách thả xuống' },
+  { label: 'option', insertText: 'option', kind: 'tag', detail: 'Lựa chọn trong select' },
+  { label: 'button', insertText: 'button', kind: 'tag', detail: 'Nút bấm' },
+  { label: 'ul', insertText: 'ul', kind: 'tag', detail: 'Danh sách không thứ tự' },
+  { label: 'ol', insertText: 'ol', kind: 'tag', detail: 'Danh sách có thứ tự' },
+  { label: 'li', insertText: 'li', kind: 'tag', detail: 'Mục danh sách' },
+  { label: 'h1', insertText: 'h1', kind: 'tag', detail: 'Tiêu đề cấp 1' },
+  { label: 'h2', insertText: 'h2', kind: 'tag', detail: 'Tiêu đề cấp 2' },
+  { label: 'p', insertText: 'p', kind: 'tag', detail: 'Đoạn văn bản' },
+  { label: 'a', insertText: 'a', kind: 'tag', detail: 'Thẻ liên kết' },
+  { label: 'img', insertText: 'img', kind: 'tag', detail: 'Thẻ hình ảnh' },
+  { label: 'div', insertText: 'div', kind: 'tag', detail: 'Khối chứa phần tử' },
+  { label: 'span', insertText: 'span', kind: 'tag', detail: 'Phần tử nội tuyến' },
+  { label: 'style', insertText: 'style', kind: 'tag', detail: 'Thẻ khai báo CSS' },
 ];
 
 const SQL_SUGGESTIONS: AutocompleteSuggestion[] = [
-  { label: 'SELECT ... FROM ... WHERE', insertText: 'SELECT *\nFROM HOC_SINH\nWHERE diem_tb >= 8.0;', kind: 'snippet', detail: 'Truy vấn trích xuất dữ liệu có điều kiện' },
-  { label: 'INNER JOIN ... ON', insertText: 'INNER JOIN LOP_HOC ON HOC_SINH.ma_lop = LOP_HOC.ma_lop', kind: 'snippet', detail: 'Kết nối 2 bảng quan hệ qua khóa ngoại' },
-  { label: 'LEFT JOIN ... ON', insertText: 'LEFT JOIN DIEM_THI ON HOC_SINH.ma_hs = DIEM_THI.ma_hs', kind: 'snippet', detail: 'Kết nối trái giữ toàn bộ bản ghi bảng chính' },
-  { label: 'GROUP BY ... HAVING', insertText: 'GROUP BY ma_lop\nHAVING COUNT(*) >= 2', kind: 'snippet', detail: 'Gom nhóm và lọc theo hàm tổng hợp' },
-  { label: 'ORDER BY ... DESC', insertText: 'ORDER BY diem_tb DESC', kind: 'snippet', detail: 'Sắp xếp kết quả giảm dần' },
-  { label: 'COUNT(*)', insertText: 'COUNT(*)', kind: 'function', detail: 'Đếm số lượng bản ghi' },
-  { label: 'AVG(cot)', insertText: 'AVG(', kind: 'function', detail: 'Tính giá trị trung bình' },
-  { label: 'SUM(cot)', insertText: 'SUM(', kind: 'function', detail: 'Tính tổng giá trị cột số' },
-  { label: 'MAX(cot)', insertText: 'MAX(', kind: 'function', detail: 'Tìm giá trị lớn nhất trong cột' },
-  { label: 'MIN(cot)', insertText: 'MIN(', kind: 'function', detail: 'Tìm giá trị nhỏ nhất trong cột' },
-  { label: 'DISTINCT', insertText: 'DISTINCT ', kind: 'keyword', detail: 'Loại bỏ các dòng trùng lặp' },
+  { label: 'SELECT', insertText: 'SELECT ', kind: 'keyword', detail: 'Từ khóa truy vấn cột dữ liệu' },
+  { label: 'FROM', insertText: 'FROM ', kind: 'keyword', detail: 'Từ khóa chỉ định bảng dữ liệu' },
+  { label: 'WHERE', insertText: 'WHERE ', kind: 'keyword', detail: 'Từ khóa lọc điều kiện bản ghi' },
+  { label: 'INNER', insertText: 'INNER ', kind: 'keyword', detail: 'Từ khóa kết nối trong (INNER JOIN)' },
+  { label: 'JOIN', insertText: 'JOIN ', kind: 'keyword', detail: 'Từ khóa kết nối bảng' },
+  { label: 'LEFT', insertText: 'LEFT ', kind: 'keyword', detail: 'Từ khóa kết nối trái (LEFT JOIN)' },
+  { label: 'ON', insertText: 'ON ', kind: 'keyword', detail: 'Từ khóa điều kiện kết nối khóa' },
+  { label: 'GROUP BY', insertText: 'GROUP BY ', kind: 'keyword', detail: 'Mệnh đề gom nhóm dữ liệu' },
+  { label: 'HAVING', insertText: 'HAVING ', kind: 'keyword', detail: 'Mệnh đề lọc nhóm sau GROUP BY' },
+  { label: 'ORDER BY', insertText: 'ORDER BY ', kind: 'keyword', detail: 'Mệnh đề sắp xếp kết quả' },
+  { label: 'ASC', insertText: 'ASC', kind: 'keyword', detail: 'Sắp xếp tăng dần' },
+  { label: 'DESC', insertText: 'DESC', kind: 'keyword', detail: 'Sắp xếp giảm dần' },
+  { label: 'DISTINCT', insertText: 'DISTINCT ', kind: 'keyword', detail: 'Loại bỏ bản ghi trùng lặp' },
+  { label: 'AS', insertText: 'AS ', kind: 'keyword', detail: 'Đặt bí danh cột hoặc bảng' },
+  { label: 'AND', insertText: 'AND ', kind: 'keyword', detail: 'Toán tử kết hợp điều kiện VÀ' },
+  { label: 'OR', insertText: 'OR ', kind: 'keyword', detail: 'Toán tử kết hợp điều kiện HOẶC' },
+  { label: 'BETWEEN', insertText: 'BETWEEN ', kind: 'keyword', detail: 'Toán tử kiểm tra khoảng giá trị' },
+  { label: 'LIKE', insertText: 'LIKE ', kind: 'keyword', detail: 'Toán tử so khớp mẫu chuỗi' },
+  { label: 'LIMIT', insertText: 'LIMIT ', kind: 'keyword', detail: 'Giới hạn số lượng bản ghi' },
+  { label: 'COUNT', insertText: 'COUNT', kind: 'function', detail: 'Hàm đếm số bản ghi' },
+  { label: 'SUM', insertText: 'SUM', kind: 'function', detail: 'Hàm tính tổng giá trị' },
+  { label: 'AVG', insertText: 'AVG', kind: 'function', detail: 'Hàm tính trung bình cộng' },
+  { label: 'MAX', insertText: 'MAX', kind: 'function', detail: 'Hàm tìm giá trị lớn nhất' },
+  { label: 'MIN', insertText: 'MIN', kind: 'function', detail: 'Hàm tìm giá trị nhỏ nhất' },
 ];
 
 export function getAutocompleteSuggestions(
   code: string,
   cursorOffset: number,
   language: Language,
-  problem?: Problem
+  _problem?: Problem
 ): AutocompleteSuggestion[] {
   const beforeCursor = code.slice(0, cursorOffset);
   const match = beforeCursor.match(/([a-zA-Z0-9_<]+)$/);
@@ -72,37 +116,19 @@ export function getAutocompleteSuggestions(
     pool = [...HTML_SUGGESTIONS];
   } else {
     pool = [...SQL_SUGGESTIONS];
-    if (problem?.sqlTables) {
-      for (const table of problem.sqlTables) {
-        pool.push({
-          label: table.tableName,
-          insertText: table.tableName,
-          kind: 'column',
-          detail: `Bảng CSDL (${table.columns.map((c) => c.name).join(', ')})`,
-        });
-        for (const col of table.columns) {
-          pool.push({
-            label: `${table.tableName}.${col.name}`,
-            insertText: col.name,
-            kind: 'column',
-            detail: `Cột ${col.type} — ${col.description}`,
-          });
-        }
-      }
-    }
   }
 
   if (!prefix) {
-    return pool.slice(0, 6);
+    return pool.slice(0, 8);
   }
 
   return pool
     .filter(
       (item) =>
-        item.label.toLowerCase().includes(prefix) ||
-        item.insertText.toLowerCase().includes(prefix)
+        item.label.toLowerCase().startsWith(prefix) ||
+        item.insertText.toLowerCase().startsWith(prefix)
     )
-    .slice(0, 7);
+    .slice(0, 8);
 }
 
 /**
@@ -161,7 +187,7 @@ export function analyzeSyntax(code: string, language: Language): SyntaxDiagnosti
 
       // Check block statements missing ':'
       const blockMatch = trimmed.match(/^(def\s+\w+\(.*\)|if\s+.+|elif\s+.+|else|for\s+.+\s+in\s+.+|while\s+.+)$/);
-      if (blockMatch && !trimmed.endsWith(':')) {
+      if (blockMatch && !trimmed.endsWith(':') && !trimmed.includes(':')) {
         diagnostics.push({
           line: lineNum,
           column: cleanLine.length,
@@ -173,7 +199,7 @@ export function analyzeSyntax(code: string, language: Language): SyntaxDiagnosti
 
       // Check assignment '=' inside 'if' condition (not '==', '!=', '<=', '>=')
       if (/^(if|elif|while)\s+/.test(trimmed)) {
-        const conditionPart = trimmed.replace(/^(if|elif|while)\s+/, '').replace(/:$/, '');
+        const conditionPart = trimmed.replace(/^(if|elif|while)\s+/, '').split(':')[0];
         if (/(?<![=!<>])=(?!=)/.test(conditionPart)) {
           diagnostics.push({
             line: lineNum,
@@ -185,14 +211,15 @@ export function analyzeSyntax(code: string, language: Language): SyntaxDiagnosti
         }
       }
 
-      // Check Python 2 print without parentheses
-      if (/^print\s+[^(]/.test(trimmed)) {
+      // Check Python 2 print or bare print without parentheses
+      if (trimmed === 'print' || /^print\s+[^(]/.test(trimmed)) {
+        const argHint = trimmed === 'print' ? '' : trimmed.replace(/^print\s+/, '');
         diagnostics.push({
           line: lineNum,
           column: 1,
           severity: 'error',
           message: 'SyntaxError: Trong Python 3, hàm print() bắt buộc phải có dấu ngoặc tròn.',
-          suggestion: `Sửa thành print(${trimmed.replace(/^print\s+/, '')})`,
+          suggestion: `Sửa thành print(${argHint})`,
         });
       }
 
@@ -407,11 +434,72 @@ export function analyzeSyntax(code: string, language: Language): SyntaxDiagnosti
 export function runPythonCode(code: string, rawInput: string): { stdout: string; error?: string } {
   const inputLines = rawInput.replace(/\r\n/g, '\n').split('\n');
   let inputIndex = 0;
-  const outputLines: string[] = [];
+  const outputChunks: string[] = [];
 
   // Transpile Python subset to safe JS function body with loop guard
   try {
-    const pyLines = code.replace(/\r\n/g, '\n').split('\n');
+    const rawPyLines = code.replace(/\r\n/g, '\n').split('\n');
+
+    // Pre-process lines: strip comments, split ';' statements outside quotes, and expand single-line blocks
+    const pyLines: string[] = [];
+    for (const raw of rawPyLines) {
+      let clean = '';
+      let inS = false;
+      let inD = false;
+      for (let c = 0; c < raw.length; c++) {
+        if (raw[c] === "'" && !inD) inS = !inS;
+        else if (raw[c] === '"' && !inS) inD = !inD;
+        else if (raw[c] === '#' && !inS && !inD) break;
+        clean += raw[c];
+      }
+      if (!clean.trim()) continue;
+
+      const baseIndent = clean.slice(0, clean.length - clean.trimStart().length);
+      const trimmedLine = clean.trim();
+
+      // Check single-line block: if/elif/else/for/while ... : stmt
+      const singleLineBlock = trimmedLine.match(
+        /^(if\s+.+|elif\s+.+|else|for\s+.+\s+in\s+.+|while\s+.+?):\s*(.+)$/
+      );
+      if (
+        singleLineBlock &&
+        !trimmedLine.startsWith('def ') &&
+        !singleLineBlock[1].includes('[')
+      ) {
+        pyLines.push(`${baseIndent}${singleLineBlock[1]}:`);
+        const bodyParts = singleLineBlock[2]
+          .split(';')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        for (const bp of bodyParts) {
+          pyLines.push(`${baseIndent}    ${bp}`);
+        }
+        continue;
+      }
+
+      // Split multiple statements separated by ';' outside quotes
+      const semiParts: string[] = [];
+      let curPart = '';
+      let sQuote = false;
+      let dQuote = false;
+      for (let c = 0; c < trimmedLine.length; c++) {
+        const ch = trimmedLine[c];
+        if (ch === "'" && !dQuote) sQuote = !sQuote;
+        else if (ch === '"' && !sQuote) dQuote = !dQuote;
+        else if (ch === ';' && !sQuote && !dQuote) {
+          if (curPart.trim()) semiParts.push(curPart.trim());
+          curPart = '';
+          continue;
+        }
+        curPart += ch;
+      }
+      if (curPart.trim()) semiParts.push(curPart.trim());
+
+      for (const part of semiParts) {
+        pyLines.push(`${baseIndent}${part}`);
+      }
+    }
+
     const jsLines: string[] = [
       'let __steps = 0;',
       'const __guard = () => { if (++__steps > 150000) throw new Error("TimeLimitExceeded: Vòng lặp vượt quá giới hạn thời gian (kiểm tra điều kiện dừng while/for)."); };',
@@ -449,6 +537,15 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
         return `__${fnName}(Array.from(${transformExpr(iterSource)}).map((${iterVar}) => (${transformExpr(itemExpr)})))`;
       }
 
+      // Handle Python inline ternary expression: A if COND else B (when not a list comprehension)
+      if (!e.startsWith('[')) {
+        const ternaryMatch = e.match(/^(.+?)\s+if\s+(.+?)\s+else\s+(.+)$/);
+        if (ternaryMatch) {
+          const [, trueExpr, condExpr, falseExpr] = ternaryMatch;
+          return `((${transformExpr(condExpr)}) ? (${transformExpr(trueExpr)}) : (${transformExpr(falseExpr)}))`;
+        }
+      }
+
       // Handle string/list reverse slice [::-1]
       e = e.replace(/([a-zA-Z_]\w*|\([^)]+\))\[::-1\]/g, '__reverse($1)');
 
@@ -456,6 +553,14 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
       e = e.replace(/(\b[\w.)\]]+\s*)\/\/(\s*[\w.(\[]+)/g, 'Math.floor($1 / $2)');
       // Replace power **
       e = e.replace(/\*\*/g, '**');
+
+      // Handle print keyword arguments sep= and end= and sorted reverse=
+      e = e
+        .replace(/\bsep\s*=\s*([^,)]+)/g, '{ __py_sep: $1 }')
+        .replace(/\bend\s*=\s*([^,)]+)/g, '{ __py_end: $1 }')
+        .replace(/\breverse\s*=\s*(True|False|true|false)/g, (_, v) =>
+          v === 'True' || v === 'true' ? 'true' : 'false'
+        );
 
       // Replace Python booleans and logical operators outside strings
       e = e
@@ -466,9 +571,11 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
         .replace(/\bor\b/g, '||')
         .replace(/\bnot\s+/g, '!');
 
-      // Replace common methods & built-ins
+      // Replace common methods & built-ins (including print -> __print so window.print is never called)
       e = e
+        .replace(/\bprint\s*\(/g, '__print(')
         .replace(/\binput\s*\(\s*\)/g, '__input()')
+        .replace(/\binput\s*\(/g, '__input(')
         .replace(/\blen\s*\(/g, '__len(')
         .replace(/\bsum\s*\(/g, '__sum(')
         .replace(/\bmax\s*\(/g, '__max(')
@@ -498,18 +605,7 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
     const fnArgVars = new Set<string>();
 
     for (let i = 0; i < pyLines.length; i++) {
-      const raw = pyLines[i];
-      // Strip inline comment safely (ignoring # inside quotes)
-      let clean = '';
-      let inS = false;
-      let inD = false;
-      for (let c = 0; c < raw.length; c++) {
-        if (raw[c] === "'" && !inD) inS = !inS;
-        else if (raw[c] === '"' && !inS) inD = !inD;
-        else if (raw[c] === '#' && !inS && !inD) break;
-        clean += raw[c];
-      }
-
+      const clean = pyLines[i];
       if (!clean.trim()) continue;
 
       const indent = clean.length - clean.trimStart().length;
@@ -523,6 +619,10 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
       if (trimmed === 'pass') {
         jsLines.push('/* pass */');
         continue;
+      }
+
+      if (trimmed === 'print' || /^print\s+[^(]/.test(trimmed)) {
+        throw new Error('SyntaxError: Trong Python 3, hàm print() bắt buộc phải có dấu ngoặc tròn, ví dụ: print(ket_qua).');
       }
 
       // elif
@@ -604,13 +704,6 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
         continue;
       }
 
-      // print(...)
-      if (trimmed.startsWith('print(') && trimmed.endsWith(')')) {
-        const inner = trimmed.slice(6, -1);
-        jsLines.push(`__print(${transformExpr(inner)});`);
-        continue;
-      }
-
       // Tuple / multiple assignment: a, b = ...
       const multiAssign = trimmed.match(/^([a-zA-Z_]\w*(?:\s*,\s*[a-zA-Z_]\w*)+)\s*=\s*(.+)$/);
       if (multiAssign) {
@@ -660,7 +753,39 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
       jsLines.unshift(`let ${Array.from(declaredVars).join(', ')};`);
     }
 
-    // Attach helper methods
+    const __printFn = (...args: unknown[]) => {
+      let sep = ' ';
+      let end = '\n';
+      const values: unknown[] = [];
+
+      for (const arg of args) {
+        if (arg && typeof arg === 'object' && !Array.isArray(arg)) {
+          const obj = arg as { __py_sep?: unknown; __py_end?: unknown };
+          if ('__py_sep' in obj) {
+            sep = String(obj.__py_sep ?? ' ');
+            continue;
+          }
+          if ('__py_end' in obj) {
+            end = String(obj.__py_end ?? '\n');
+            continue;
+          }
+        }
+        values.push(arg);
+      }
+
+      const formatted = values
+        .map((a) => {
+          if (typeof a === 'boolean') return a ? 'True' : 'False';
+          if (a === null || a === undefined) return 'None';
+          if (Array.isArray(a)) return `[${a.map((x) => (typeof x === 'string' ? `'${x}'` : String(x))).join(', ')}]`;
+          return String(a);
+        })
+        .join(sep);
+
+      outputChunks.push(formatted + end);
+    };
+
+    // Attach helper methods and explicitly shadow 'print' and browser dialog globals
     const helpers = {
       __input: () => {
         if (inputIndex < inputLines.length) {
@@ -668,18 +793,13 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
         }
         return '';
       },
-      __print: (...args: unknown[]) => {
-        outputLines.push(
-          args
-            .map((a) => {
-              if (typeof a === 'boolean') return a ? 'True' : 'False';
-              if (a === null || a === undefined) return 'None';
-              if (Array.isArray(a)) return `[${a.map((x) => (typeof x === 'string' ? `'${x}'` : String(x))).join(', ')}]`;
-              return String(a);
-            })
-            .join(' ')
-        );
-      },
+      __print: __printFn,
+      print: __printFn,
+      window: {},
+      alert: __printFn,
+      confirm: () => false,
+      prompt: () => (inputIndex < inputLines.length ? inputLines[inputIndex++] : ''),
+      open: () => null,
       __len: (x: unknown) => {
         if (typeof x === 'string' || Array.isArray(x)) return x.length;
         if (x && typeof x === 'object') return Object.keys(x).length;
@@ -743,11 +863,25 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
       jsLines.join('\n')
     );
 
-    runner(...Object.values(helpers));
-    return { stdout: outputLines.join('\n').trim() };
+    const originalWindowPrint = typeof window !== 'undefined' ? window.print : undefined;
+    if (typeof window !== 'undefined') {
+      window.print = (...args: unknown[]) => {
+        __printFn(...args);
+      };
+    }
+
+    try {
+      runner(...Object.values(helpers));
+    } finally {
+      if (typeof window !== 'undefined' && originalWindowPrint) {
+        window.print = originalWindowPrint;
+      }
+    }
+
+    return { stdout: outputChunks.join('').trim() };
   } catch (err) {
     return {
-      stdout: outputLines.join('\n').trim(),
+      stdout: outputChunks.join('').trim(),
       error: err instanceof Error ? err.message : String(err),
     };
   }
