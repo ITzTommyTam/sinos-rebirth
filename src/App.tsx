@@ -96,30 +96,35 @@ export default function App() {
   const [syncStatusMessage, setSyncStatusMessage] = useState<string>('');
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setFirebaseUser(user);
-      if (user) {
-        setIsSyncing(true);
-        try {
-          const synced = await syncProgressWithCloud(
-            user.uid,
-            loadLocalProgress()
-          );
-          setProgress(synced);
-          setSyncStatusMessage(
-            `Đã đồng bộ tự động với tài khoản đám mây (${user.email || user.displayName}).`
-          );
-        } catch (err) {
-          console.error(err);
-          setSyncStatusMessage(
-            'Đang sử dụng bộ nhớ cục bộ (kiểm tra xác thực email tài khoản nếu cần đồng bộ Cloud).'
-          );
-        } finally {
-          setIsSyncing(false);
+    try {
+      const unsubscribe = onAuthStateChanged(auth, async (user) => {
+        setFirebaseUser(user);
+        if (user) {
+          setIsSyncing(true);
+          try {
+            const synced = await syncProgressWithCloud(
+              user.uid,
+              loadLocalProgress()
+            );
+            setProgress(synced);
+            setSyncStatusMessage(
+              `Đã đồng bộ tự động với tài khoản đám mây (${user.email || user.displayName}).`
+            );
+          } catch (err) {
+            console.error(err);
+            setSyncStatusMessage(
+              'Đang sử dụng bộ nhớ cục bộ (kiểm tra xác thực email tài khoản nếu cần đồng bộ Cloud).'
+            );
+          } finally {
+            setIsSyncing(false);
+          }
         }
-      }
-    });
-    return () => unsubscribe();
+      });
+      return () => unsubscribe();
+    } catch (err) {
+      console.error('Firebase Auth initialization skipped:', err);
+      return undefined;
+    }
   }, []);
 
   const selectedProblem = useMemo(
