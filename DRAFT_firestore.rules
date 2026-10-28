@@ -1,0 +1,242 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 1: Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Hardened Global Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    // Pillar 2 & 5: Validation Blueprints with Strict Keys, Size Limits, and Total Array Guarding
+    function isValidUserProgress(data) {
+      return data.keys().hasAll([
+          'userId',
+          'displayName',
+          'schoolName',
+          'targetUniversity',
+          'xp',
+          'streakDays',
+          'solvedCount',
+          'solvedIds',
+          'examCount',
+          'deviceLabel',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'userId',
+          'displayName',
+          'schoolName',
+          'targetUniversity',
+          'xp',
+          'streakDays',
+          'solvedCount',
+          'solvedIds',
+          'examCount',
+          'deviceLabel',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.userId) &&
+        data.userId == request.auth.uid &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        data.schoolName is string && data.schoolName.size() >= 0 && data.schoolName.size() <= 150 &&
+        data.targetUniversity is string && data.targetUniversity.size() >= 0 && data.targetUniversity.size() <= 150 &&
+        data.xp is number && data.xp >= 0 && data.xp <= 10000000 &&
+        data.streakDays is number && data.streakDays >= 0 && data.streakDays <= 10000 &&
+        data.solvedCount is number && data.solvedCount >= 0 && data.solvedCount <= 50000 &&
+        data.solvedIds is list && data.solvedIds.size() <= 500 &&
+        (data.solvedIds.size() == 0 || (data.solvedIds[0] is string && data.solvedIds[0].size() >= 1 && data.solvedIds[0].size() <= 128)) &&
+        data.examCount is number && data.examCount >= 0 && data.examCount <= 10000 &&
+        data.deviceLabel is string && data.deviceLabel.size() >= 1 && data.deviceLabel.size() <= 100 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSubmissionRecord(data) {
+      return data.keys().hasAll([
+          'submissionId',
+          'userId',
+          'problemId',
+          'problemTitle',
+          'language',
+          'difficulty',
+          'code',
+          'passed',
+          'score',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'submissionId',
+          'userId',
+          'problemId',
+          'problemTitle',
+          'language',
+          'difficulty',
+          'code',
+          'passed',
+          'score',
+          'createdAt'
+        ]) &&
+        isValidId(data.submissionId) &&
+        isValidId(data.userId) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.problemId) &&
+        data.problemTitle is string && data.problemTitle.size() >= 1 && data.problemTitle.size() <= 200 &&
+        data.language is string && data.language.size() >= 1 && data.language.size() <= 20 &&
+        data.language in ['python', 'html', 'sql'] &&
+        data.difficulty is string && data.difficulty.size() >= 1 && data.difficulty.size() <= 20 &&
+        data.difficulty in ['easy', 'medium', 'hard', 'advanced'] &&
+        data.code is string && data.code.size() >= 1 && data.code.size() <= 20000 &&
+        data.passed is bool &&
+        data.score is number && data.score >= 0 && data.score <= 1000 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidExamAttempt(data) {
+      return data.keys().hasAll([
+          'attemptId',
+          'userId',
+          'examId',
+          'examTitle',
+          'totalScore',
+          'maxScore',
+          'durationSeconds',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'attemptId',
+          'userId',
+          'examId',
+          'examTitle',
+          'totalScore',
+          'maxScore',
+          'durationSeconds',
+          'createdAt'
+        ]) &&
+        isValidId(data.attemptId) &&
+        isValidId(data.userId) &&
+        data.userId == request.auth.uid &&
+        isValidId(data.examId) &&
+        data.examTitle is string && data.examTitle.size() >= 1 && data.examTitle.size() <= 200 &&
+        data.totalScore is number && data.totalScore >= 0 && data.totalScore <= 1000 &&
+        data.maxScore is number && data.maxScore >= 1 && data.maxScore <= 1000 &&
+        data.durationSeconds is number && data.durationSeconds >= 0 && data.durationSeconds <= 86400 &&
+        data.createdAt is timestamp;
+    }
+
+    // Root Collection: UserProgress
+    match /user_progress/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+
+      allow create: if isOwner(userId) &&
+        isValidId(userId) &&
+        isValidUserProgress(incoming()) &&
+        incoming().userId == userId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isOwner(userId) &&
+        isValidId(userId) &&
+        isValidUserProgress(incoming()) &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          // Action 1: Study progress & metric synchronization
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'xp',
+            'streakDays',
+            'solvedCount',
+            'solvedIds',
+            'examCount',
+            'deviceLabel',
+            'updatedAt'
+          ]) ||
+          // Action 2: Full profile & academic target synchronization
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'displayName',
+            'schoolName',
+            'targetUniversity',
+            'xp',
+            'streakDays',
+            'solvedCount',
+            'solvedIds',
+            'examCount',
+            'deviceLabel',
+            'updatedAt'
+          ])
+        );
+
+      allow delete: if false;
+
+      // Subcollection: Submissions (Master Gate enforced)
+      match /submissions/{submissionId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(submissionId) &&
+          get(/databases/$(database)/documents/user_progress/$(userId)).data.userId == request.auth.uid;
+
+        allow list: if isOwner(userId) &&
+          existing().userId == request.auth.uid;
+
+        allow create: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(submissionId) &&
+          isValidSubmissionRecord(incoming()) &&
+          incoming().submissionId == submissionId &&
+          incoming().userId == userId &&
+          incoming().createdAt == request.time &&
+          get(/databases/$(database)/documents/user_progress/$(userId)).data.userId == request.auth.uid;
+
+        allow update, delete: if false;
+      }
+
+      // Subcollection: Exam Attempts (Master Gate enforced)
+      match /exam_attempts/{attemptId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(attemptId) &&
+          get(/databases/$(database)/documents/user_progress/$(userId)).data.userId == request.auth.uid;
+
+        allow list: if isOwner(userId) &&
+          existing().userId == request.auth.uid;
+
+        allow create: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(attemptId) &&
+          isValidExamAttempt(incoming()) &&
+          incoming().attemptId == attemptId &&
+          incoming().userId == userId &&
+          incoming().createdAt == request.time &&
+          get(/databases/$(database)/documents/user_progress/$(userId)).data.userId == request.auth.uid;
+
+        allow update, delete: if false;
+      }
+    }
+  }
+}

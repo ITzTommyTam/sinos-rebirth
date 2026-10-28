@@ -1,0 +1,240 @@
+{
+  "entities": {
+    "UserProgress": {
+      "title": "UserProgress",
+      "description": "Stores synchronized user academic progress, XP, solved problem IDs, and study metadata across devices.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Unique identifier matching Firebase Auth UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Student display name",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "schoolName": {
+          "type": "string",
+          "description": "High school name",
+          "minLength": 0,
+          "maxLength": 150
+        },
+        "targetUniversity": {
+          "type": "string",
+          "description": "Target university or exam track",
+          "minLength": 0,
+          "maxLength": 150
+        },
+        "xp": {
+          "type": "number",
+          "description": "Total accumulated experience points"
+        },
+        "streakDays": {
+          "type": "number",
+          "description": "Consecutive study days"
+        },
+        "solvedCount": {
+          "type": "number",
+          "description": "Total number of solved exercises"
+        },
+        "solvedIds": {
+          "type": "array",
+          "description": "Bounded list of up to 500 solved problem IDs"
+        },
+        "examCount": {
+          "type": "number",
+          "description": "Total completed mock exams"
+        },
+        "deviceLabel": {
+          "type": "string",
+          "description": "Label of the last synchronized device",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of profile creation"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last sync"
+        }
+      },
+      "required": [
+        "userId",
+        "displayName",
+        "schoolName",
+        "targetUniversity",
+        "xp",
+        "streakDays",
+        "solvedCount",
+        "solvedIds",
+        "examCount",
+        "deviceLabel",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SubmissionRecord": {
+      "title": "SubmissionRecord",
+      "description": "Individual code submission record for Python, HTML, or SQL problems.",
+      "type": "object",
+      "properties": {
+        "submissionId": {
+          "type": "string",
+          "description": "Submission identifier",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Owner UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "problemId": {
+          "type": "string",
+          "description": "Problem identifier",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "problemTitle": {
+          "type": "string",
+          "description": "Problem title",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "language": {
+          "type": "string",
+          "description": "Programming language",
+          "enum": ["python", "html", "sql"],
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "difficulty": {
+          "type": "string",
+          "description": "Difficulty tier",
+          "enum": ["easy", "medium", "hard", "advanced"],
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "code": {
+          "type": "string",
+          "description": "Submitted source code",
+          "minLength": 1,
+          "maxLength": 20000
+        },
+        "passed": {
+          "type": "boolean",
+          "description": "Whether all test cases passed"
+        },
+        "score": {
+          "type": "number",
+          "description": "Score awarded for this submission"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of submission"
+        }
+      },
+      "required": [
+        "submissionId",
+        "userId",
+        "problemId",
+        "problemTitle",
+        "language",
+        "difficulty",
+        "code",
+        "passed",
+        "score",
+        "createdAt"
+      ]
+    },
+    "ExamAttempt": {
+      "title": "ExamAttempt",
+      "description": "Completed mock exam attempt for THPT National Graduation or University Competency Assessment.",
+      "type": "object",
+      "properties": {
+        "attemptId": {
+          "type": "string",
+          "description": "Attempt identifier",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Owner UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "examId": {
+          "type": "string",
+          "description": "Exam identifier",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "examTitle": {
+          "type": "string",
+          "description": "Title of the mock exam",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "totalScore": {
+          "type": "number",
+          "description": "Achieved score"
+        },
+        "maxScore": {
+          "type": "number",
+          "description": "Maximum possible score"
+        },
+        "durationSeconds": {
+          "type": "number",
+          "description": "Time spent in seconds"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of exam completion"
+        }
+      },
+      "required": [
+        "attemptId",
+        "userId",
+        "examId",
+        "examTitle",
+        "totalScore",
+        "maxScore",
+        "durationSeconds",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/user_progress/{userId}": {
+      "schema": { "$ref": "#/entities/UserProgress" },
+      "description": "Root user progress document keyed by Firebase Auth UID"
+    },
+    "/user_progress/{userId}/submissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/SubmissionRecord" },
+      "description": "Subcollection of code submissions belonging to the user"
+    },
+    "/user_progress/{userId}/exam_attempts/{attemptId}": {
+      "schema": { "$ref": "#/entities/ExamAttempt" },
+      "description": "Subcollection of completed mock exam attempts belonging to the user"
+    }
+  }
+}
