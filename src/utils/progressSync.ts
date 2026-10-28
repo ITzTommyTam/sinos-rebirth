@@ -4,11 +4,11 @@ import {
   getDoc,
   getDocs,
   limit,
-  orderBy,
   query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
 } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import {
@@ -27,6 +27,7 @@ export function getDefaultProgress(): UserProgressState {
     displayName: '',
     schoolName: '',
     className: '',
+    cloudEmail: '',
     targetUniversity: '',
     profileCompleted: false,
     xp: 0,
@@ -71,14 +72,18 @@ export function loadLocalProgress(): UserProgressState {
     const parsed = JSON.parse(raw) as Partial<UserProgressState>;
     const def = getDefaultProgress();
     const displayName = typeof parsed.displayName === 'string' ? parsed.displayName : '';
+    const cloudEmail = typeof parsed.cloudEmail === 'string' ? parsed.cloudEmail : '';
     return {
       ...def,
       ...parsed,
       displayName,
+      cloudEmail,
       schoolName: typeof parsed.schoolName === 'string' ? parsed.schoolName : '',
       className: typeof parsed.className === 'string' ? parsed.className : '',
       targetUniversity: typeof parsed.targetUniversity === 'string' ? parsed.targetUniversity : '',
-      profileCompleted: Boolean(parsed.profileCompleted || displayName.trim().length > 0),
+      profileCompleted: Boolean(
+        parsed.profileCompleted || displayName.trim().length > 0 || cloudEmail.trim().length > 0
+      ),
       solvedIds: Array.isArray(parsed.solvedIds) ? parsed.solvedIds.slice(0, 500) : def.solvedIds,
       submissions: Array.isArray(parsed.submissions) ? parsed.submissions : def.submissions,
       examAttempts: Array.isArray(parsed.examAttempts) ? parsed.examAttempts : def.examAttempts,
@@ -105,6 +110,7 @@ export function exportSyncToken(state: UserProgressState): string {
     d: state.displayName,
     s: state.schoolName,
     c: state.className || '',
+    e: state.cloudEmail || '',
     u: state.targetUniversity,
     x: state.xp,
     st: state.streakDays,
@@ -124,13 +130,17 @@ export function importSyncToken(token: string, current: UserProgressState): User
   }
   const mergedIds = Array.from(new Set([...current.solvedIds, ...parsed.ids])).slice(0, 500);
   const nextName = String(parsed.d || current.displayName).slice(0, 100);
+  const nextEmail = String(parsed.e ?? current.cloudEmail ?? '').slice(0, 120);
   const next: UserProgressState = {
     ...current,
     displayName: nextName,
     schoolName: String(parsed.s ?? current.schoolName).slice(0, 150),
     className: String(parsed.c ?? current.className ?? '').slice(0, 50),
+    cloudEmail: nextEmail,
     targetUniversity: String(parsed.u ?? current.targetUniversity).slice(0, 150),
-    profileCompleted: Boolean(nextName.trim().length > 0 || current.profileCompleted),
+    profileCompleted: Boolean(
+      nextName.trim().length > 0 || nextEmail.trim().length > 0 || current.profileCompleted
+    ),
     xp: Math.max(current.xp, Number(parsed.x) || 0),
     streakDays: Math.max(current.streakDays, Number(parsed.st) || 1),
     solvedIds: mergedIds,
@@ -160,6 +170,7 @@ export async function syncProgressWithCloud(
   const safeUid = sanitizeId(uid);
   const userDocPath = `user_progress/${safeUid}`;
   const userDocRef = doc(db, 'user_progress', safeUid);
+  const authEmail = auth.currentUser.email || localState.cloudEmail || '';
 
   try {
     const snap = await getDoc(userDocRef);
@@ -172,7 +183,12 @@ export async function syncProgressWithCloud(
 
       const createPayload = {
         userId: safeUid,
-        displayName: (localState.displayName || auth.currentUser.displayName || 'Học Sinh').slice(0, 100),
+        displayName: (
+          localState.displayName ||
+          auth.currentUser.displayName ||
+          (authEmail ? authEmail.split('@')[0] : '') ||
+          'Học Sinh'
+        ).slice(0, 100),
         schoolName: (localState.schoolName || '').slice(0, 150),
         targetUniversity: (localState.targetUniversity || '').slice(0, 150),
         xp: Math.max(0, Math.min(10000000, Math.round(localState.xp))),
@@ -190,6 +206,7 @@ export async function syncProgressWithCloud(
         ...localState,
         userId: safeUid,
         displayName: createPayload.displayName,
+        cloudEmail: authEmail,
         profileCompleted: true,
         solvedIds: sanitizedSolved,
         solvedCount: sanitizedSolved.length,
@@ -208,7 +225,12 @@ export async function syncProgressWithCloud(
       const mergedXp = Math.max(localState.xp, Number(cloudData.xp) || 0);
       const mergedStreak = Math.max(localState.streakDays, Number(cloudData.streakDays) || 1);
       const mergedExamCount = Math.max(localState.examCount, Number(cloudData.examCount) || 0);
-      const displayName = (localState.displayName || cloudData.displayName || 'Học Sinh').slice(0, 100);
+      const displayName = (
+        localState.displayName ||
+        cloudData.displayName ||
+        auth.currentUser.displayName ||
+        'Học Sinh'
+      ).slice(0, 100);
       const schoolName = (localState.schoolName || cloudData.schoolName || '').slice(0, 150);
       const targetUniversity = (localState.targetUniversity || cloudData.targetUniversity || '').slice(0, 150);
 
@@ -225,39 +247,43 @@ export async function syncProgressWithCloud(
         updatedAt: serverTimestamp(),
       });
 
-      const subsPath = `user_progress/${safeUid}/submissions`;
-      const subsQuery = query(
-        collection(db, subsPath),
-        orderBy('createdAt', 'desc'),
-        limit(20)
-      );
-      const subsSnap = await getDocs(subsQuery);
-      const cloudSubs: SubmissionItem[] = subsSnap.docs.map((d) => {
-        const data = d.data();
-        return {
-          submissionId: String(data.submissionId),
-          userId: String(data.userId),
-          problemId: String(data.problemId),
-          problemTitle: String(data.problemTitle),
-          language: data.language as Language,
-          difficulty: data.difficulty as Difficulty,
-          code: String(data.code),
-          passed: Boolean(data.passed),
-          score: Number(data.score) || 0,
-          createdAtIso: new Date().toISOString(),
-        };
-      });
-
       const mergedSubsMap = new Map<string, SubmissionItem>();
-      [...localState.submissions, ...cloudSubs].forEach((s) => {
-        mergedSubsMap.set(s.submissionId, s);
-      });
+      localState.submissions.forEach((s) => mergedSubsMap.set(s.submissionId, s));
+
+      try {
+        const subsPath = `user_progress/${safeUid}/submissions`;
+        const subsQuery = query(
+          collection(db, subsPath),
+          where('userId', '==', safeUid),
+          limit(20)
+        );
+        const subsSnap = await getDocs(subsQuery);
+        subsSnap.docs.forEach((d) => {
+          const data = d.data();
+          const subItem: SubmissionItem = {
+            submissionId: String(data.submissionId),
+            userId: String(data.userId),
+            problemId: String(data.problemId),
+            problemTitle: String(data.problemTitle),
+            language: data.language as Language,
+            difficulty: data.difficulty as Difficulty,
+            code: String(data.code),
+            passed: Boolean(data.passed),
+            score: Number(data.score) || 0,
+            createdAtIso: new Date().toISOString(),
+          };
+          mergedSubsMap.set(subItem.submissionId, subItem);
+        });
+      } catch (subErr) {
+        console.warn('Skipping subcollection sync:', subErr);
+      }
 
       const mergedState: UserProgressState = {
         ...localState,
         userId: safeUid,
         displayName,
         schoolName,
+        cloudEmail: authEmail,
         targetUniversity,
         profileCompleted: true,
         xp: mergedXp,

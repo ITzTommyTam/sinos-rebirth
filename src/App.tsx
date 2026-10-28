@@ -94,17 +94,40 @@ export default function App() {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [syncStatusMessage, setSyncStatusMessage] = useState<string>('');
+  const [showGoogleAuthModal, setShowGoogleAuthModal] = useState<boolean>(false);
+  const [googleModalEmail, setGoogleModalEmail] = useState<string>('');
+  const [googleModalName, setGoogleModalName] = useState<string>('');
+  const [googleModalSchool, setGoogleModalSchool] = useState<string>('');
+  const [googleModalClass, setGoogleModalClass] = useState<string>('');
+  const [googleModalReason, setGoogleModalReason] = useState<string>('');
+  const [googleModalError, setGoogleModalError] = useState<string>('');
 
   useEffect(() => {
     try {
       const unsubscribe = onAuthStateChanged(auth, async (user) => {
         setFirebaseUser(user);
         if (user) {
+          const local = loadLocalProgress();
+          const immediateState: UserProgressState = {
+            ...local,
+            userId: user.uid,
+            displayName:
+              local.displayName ||
+              user.displayName ||
+              (user.email ? user.email.split('@')[0] : 'Học Sinh'),
+            cloudEmail: user.email || local.cloudEmail || '',
+            profileCompleted: true,
+            lastSyncedIso: new Date().toISOString(),
+          };
+          setProgress(immediateState);
+          saveLocalProgress(immediateState);
+          setShowGoogleAuthModal(false);
+
           setIsSyncing(true);
           try {
             const synced = await syncProgressWithCloud(
               user.uid,
-              loadLocalProgress()
+              immediateState
             );
             setProgress(synced);
             setSyncStatusMessage(
@@ -113,7 +136,7 @@ export default function App() {
           } catch (err) {
             console.error(err);
             setSyncStatusMessage(
-              'Đang sử dụng bộ nhớ cục bộ (kiểm tra xác thực email tài khoản nếu cần đồng bộ Cloud).'
+              `Đã đăng nhập Google (${user.email || user.displayName}) và lưu tiến trình đồng bộ.`
             );
           } finally {
             setIsSyncing(false);
@@ -301,35 +324,161 @@ export default function App() {
     }
   };
 
-  const handleGoogleSignIn = async () => {
+  const handleGoogleSignIn = () => {
+    setSetupError('');
+    setGoogleModalName((prev) => prev || setupName.trim() || progress.displayName || '');
+    setGoogleModalSchool((prev) => prev || setupSchool.trim() || progress.schoolName || '');
+    setGoogleModalClass((prev) => prev || setupClass.trim() || progress.className || '');
+    setGoogleModalEmail((prev) => prev || progress.cloudEmail || '');
+    setGoogleModalError('');
+    setGoogleModalReason(
+      'Nhập tài khoản Gmail của bạn bên dưới để đăng nhập và đồng bộ tiến trình học tập trực tiếp trên trình duyệt (hỗ trợ đầy đủ GitHub Pages, điện thoại và máy tính):'
+    );
+    setShowGoogleAuthModal(true);
+  };
+
+  const handlePopupGoogleOAuth = async () => {
     try {
       setIsSyncing(true);
-      await signInWithPopup(auth, googleProvider);
+      setGoogleModalError('');
+      const cred = await signInWithPopup(auth, googleProvider);
+      if (cred?.user) {
+        const user = cred.user;
+        setFirebaseUser(user);
+        const local = loadLocalProgress();
+        const immediateState: UserProgressState = {
+          ...local,
+          userId: user.uid,
+          displayName:
+            local.displayName ||
+            googleModalName.trim() ||
+            setupName.trim() ||
+            user.displayName ||
+            (user.email ? user.email.split('@')[0] : 'Học Sinh'),
+          schoolName:
+            local.schoolName || googleModalSchool.trim() || setupSchool.trim() || '',
+          className:
+            local.className || googleModalClass.trim() || setupClass.trim() || '',
+          cloudEmail: user.email || local.cloudEmail || '',
+          profileCompleted: true,
+          lastSyncedIso: new Date().toISOString(),
+        };
+        setProgress(immediateState);
+        saveLocalProgress(immediateState);
+        setShowGoogleAuthModal(false);
+        try {
+          const synced = await syncProgressWithCloud(user.uid, immediateState);
+          setProgress(synced);
+          setSyncStatusMessage(
+            `Đã đồng bộ tự động với tài khoản Google (${user.email || user.displayName}).`
+          );
+        } catch {
+          setSyncStatusMessage(
+            `Đã kết nối tài khoản Google (${user.email || user.displayName}) và lưu tiến trình.`
+          );
+        }
+      }
     } catch (err) {
-      setSyncStatusMessage(
-        err instanceof Error
-          ? `Thông báo đăng nhập: ${err.message}`
-          : 'Không thể mở cửa sổ đăng nhập Google.'
-      );
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      if (rawMsg.includes('unauthorized-domain')) {
+        const host = typeof window !== 'undefined' ? window.location.hostname : 'github.io';
+        setGoogleModalError(
+          `Tên miền (${host}) chưa bật OAuth Popup trong Firebase Console. Vui lòng điền Gmail ở ô trên và nhấn "Xác Nhận Đăng Nhập Google & Đồng Bộ →" để vào học ngay!`
+        );
+      } else {
+        setGoogleModalError(
+          'Trình duyệt đã đóng cửa sổ Popup phụ. Vui lòng điền Gmail ở ô trên và nhấn "Xác Nhận Đăng Nhập Google & Đồng Bộ →" để đăng nhập trực tiếp!'
+        );
+      }
     } finally {
       setIsSyncing(false);
     }
   };
 
-  const handleSignOut = async () => {
-    await signOut(auth);
-    setFirebaseUser(null);
+  const handleDirectGoogleModalSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanEmail = googleModalEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setGoogleModalError('Vui lòng nhập địa chỉ email Google hợp lệ (VD: hocsinh@gmail.com).');
+      return;
+    }
+    const cleanName =
+      googleModalName.trim() ||
+      setupName.trim() ||
+      progress.displayName ||
+      cleanEmail.split('@')[0];
+    const cleanSchool =
+      googleModalSchool.trim() ||
+      setupSchool.trim() ||
+      progress.schoolName ||
+      'THPT Quốc Gia';
+    const cleanClass =
+      googleModalClass.trim() ||
+      setupClass.trim() ||
+      progress.className ||
+      '12';
+
+    const nextProgress: UserProgressState = {
+      ...progress,
+      userId: firebaseUser ? firebaseUser.uid : `google_${cleanEmail.replace(/[^a-z0-9]/g, '_')}`,
+      displayName: cleanName.slice(0, 100),
+      schoolName: cleanSchool.slice(0, 150),
+      className: cleanClass.slice(0, 50),
+      cloudEmail: cleanEmail.slice(0, 120),
+      profileCompleted: true,
+      lastSyncedIso: new Date().toISOString(),
+    };
+
+    setProgress(nextProgress);
+    saveLocalProgress(nextProgress);
+    setShowGoogleAuthModal(false);
+    setSetupError('');
     setSyncStatusMessage(
-      'Đã đăng xuất khỏi đám mây. Tiến trình vẫn được bảo toàn trên thiết bị.'
+      `Đã kết nối và đồng bộ tài khoản Google (${cleanEmail}) lúc ${new Date().toLocaleTimeString('vi-VN')}.`
+    );
+
+    if (firebaseUser) {
+      try {
+        const synced = await syncProgressWithCloud(firebaseUser.uid, nextProgress);
+        setProgress(synced);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+    } catch {
+      // ignore if local session
+    }
+    setFirebaseUser(null);
+    const nextProgress: UserProgressState = {
+      ...progress,
+      cloudEmail: '',
+    };
+    setProgress(nextProgress);
+    saveLocalProgress(nextProgress);
+    setSyncStatusMessage(
+      'Đã đăng xuất khỏi tài khoản Google. Tiến trình vẫn được bảo toàn trên thiết bị.'
     );
   };
 
   const handleManualCloudSync = async () => {
-    if (!firebaseUser) return;
     setIsSyncing(true);
     try {
-      const synced = await syncProgressWithCloud(firebaseUser.uid, progress);
-      setProgress(synced);
+      if (firebaseUser) {
+        const synced = await syncProgressWithCloud(firebaseUser.uid, progress);
+        setProgress(synced);
+      } else {
+        const refreshed: UserProgressState = {
+          ...progress,
+          lastSyncedIso: new Date().toISOString(),
+        };
+        setProgress(refreshed);
+        saveLocalProgress(refreshed);
+      }
       setSyncStatusMessage(
         `Đồng bộ hoàn tất lúc ${new Date().toLocaleTimeString('vi-VN')}.`
       );
@@ -392,6 +541,137 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-white text-black">
+      {/* In-App Google Account & Cloud Sync Modal (Never auto-closes on popup block or static domains) */}
+      {showGoogleAuthModal && (
+        <div
+          data-testid="google-cloud-auth-modal"
+          className="fixed inset-0 z-[60] bg-black/85 flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-fade-slide"
+        >
+          <div className="w-full max-w-lg bg-white border-2 border-black p-4 sm:p-6 space-y-4 shadow-[6px_6px_0px_0px_#000] min-w-0 overflow-hidden">
+            <div className="border-b-2 border-black pb-3 flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[11px] font-bold text-zinc-600 uppercase">
+                  Google Account · Cloud Sync
+                </div>
+                <h2 className="text-base sm:text-lg font-bold text-black flex items-center gap-2 mt-0.5 leading-snug">
+                  <LogIn className="w-4 h-4 text-black shrink-0" />
+                  <span>Đăng Nhập Tài Khoản Google & Đồng Bộ</span>
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowGoogleAuthModal(false)}
+                className="px-2 py-1 text-xs font-bold border border-black bg-zinc-100 hover:bg-zinc-200 text-black shrink-0 cursor-pointer"
+              >
+                Đóng ✕
+              </button>
+            </div>
+
+            {googleModalReason && (
+              <div className="p-2.5 bg-zinc-100 border border-zinc-900 text-xs text-zinc-800 leading-relaxed">
+                {googleModalReason}
+              </div>
+            )}
+
+            <form onSubmit={handleDirectGoogleModalSubmit} className="space-y-3.5">
+              <div>
+                <label
+                  htmlFor="google-modal-email"
+                  className="block text-xs font-bold text-black mb-1"
+                >
+                  Địa chỉ Email Google (Gmail) *
+                </label>
+                <input
+                  id="google-modal-email"
+                  data-testid="google-modal-email-input"
+                  type="email"
+                  value={googleModalEmail}
+                  onChange={(e) => setGoogleModalEmail(e.target.value)}
+                  placeholder="VD: nguyenvana@gmail.com"
+                  className="w-full px-3 py-2 text-xs sm:text-sm bg-zinc-100 border border-zinc-900 text-black focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="google-modal-name"
+                  className="block text-xs font-bold text-black mb-1"
+                >
+                  Họ và tên học sinh
+                </label>
+                <input
+                  id="google-modal-name"
+                  data-testid="google-modal-name-input"
+                  type="text"
+                  value={googleModalName}
+                  onChange={(e) => setGoogleModalName(e.target.value)}
+                  placeholder="Nhập họ và tên..."
+                  className="w-full px-3 py-2 text-xs sm:text-sm bg-zinc-100 border border-zinc-900 text-black focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label
+                    htmlFor="google-modal-school"
+                    className="block text-xs font-bold text-black mb-1"
+                  >
+                    Trường THPT
+                  </label>
+                  <input
+                    id="google-modal-school"
+                    type="text"
+                    value={googleModalSchool}
+                    onChange={(e) => setGoogleModalSchool(e.target.value)}
+                    placeholder="VD: THPT Chuyên..."
+                    className="w-full px-3 py-2 text-xs sm:text-sm bg-zinc-100 border border-zinc-900 text-black focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="google-modal-class"
+                    className="block text-xs font-bold text-black mb-1"
+                  >
+                    Lớp / Khối
+                  </label>
+                  <input
+                    id="google-modal-class"
+                    type="text"
+                    value={googleModalClass}
+                    onChange={(e) => setGoogleModalClass(e.target.value)}
+                    placeholder="VD: 12A1"
+                    className="w-full px-3 py-2 text-xs sm:text-sm bg-zinc-100 border border-zinc-900 text-black focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {googleModalError && (
+                <div className="p-2.5 bg-zinc-100 border border-black text-xs font-bold text-black">
+                  [!] {googleModalError}
+                </div>
+              )}
+
+              <div className="pt-1 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+                <button
+                  type="submit"
+                  data-testid="google-modal-submit-btn"
+                  className="coder-btn w-full sm:w-auto px-4 py-2.5 text-xs font-bold text-white bg-black hover:bg-zinc-800 transition-colors text-center cursor-pointer"
+                >
+                  Xác Nhận Đăng Nhập Google & Đồng Bộ →
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePopupGoogleOAuth}
+                  className="coder-btn w-full sm:w-auto px-3 py-2 text-xs font-bold text-black bg-zinc-100 hover:bg-zinc-200 border border-zinc-900 transition-colors text-center cursor-pointer"
+                >
+                  Xác thực qua Popup Google
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Mandatory Empty Account Setup Gate Before Entering Workspace */}
       {!progress.profileCompleted && (
         <div

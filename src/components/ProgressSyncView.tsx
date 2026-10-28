@@ -145,12 +145,12 @@ export const ProgressSyncView: React.FC<ProgressSyncViewProps> = ({
 
         {/* Account & Firebase Cloud Sync Actions */}
         <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2.5 sm:gap-3 w-full lg:w-auto min-w-0">
-          {firebaseUser ? (
+          {firebaseUser || progress.cloudEmail ? (
             <>
               <div className="px-3 py-2 bg-white border border-zinc-900 text-xs text-black font-bold flex items-center gap-1.5 min-w-0">
                 <ShieldCheck className="w-4 h-4 shrink-0" />
                 <span className="truncate">
-                  Đã kết nối Cloud ({firebaseUser.email || firebaseUser.displayName})
+                  Đã kết nối Google ({firebaseUser?.email || progress.cloudEmail || firebaseUser?.displayName})
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-2">

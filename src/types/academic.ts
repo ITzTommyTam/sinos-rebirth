@@ -186,6 +186,7 @@ export interface UserProgressState {
   displayName: string;
   schoolName: string;
   className?: string;
+  cloudEmail?: string;
   targetUniversity: string;
   profileCompleted?: boolean;
   xp: number;
