@@ -14,6 +14,7 @@ import { Problem, UserProgressState } from '../types/academic';
 import {
   CloudLeaderboardEntry,
   getCanonicalSyncKey,
+  isIgnoredTestEntry,
   subscribeToLeaderboard,
   syncProgressWithCloud,
 } from '../utils/progressSync';
@@ -24,7 +25,6 @@ interface LeaderboardViewProps {
   firebaseUser: User | null;
 }
 
-type LeaderboardScope = 'ALL' | 'SAME_SCHOOL' | 'SAME_CLASS';
 type LeaderboardSortBy = 'xp' | 'solvedCount' | 'examCount';
 
 export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
@@ -32,7 +32,6 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
   firebaseUser,
 }) => {
   const [cloudEntries, setCloudEntries] = useState<CloudLeaderboardEntry[]>([]);
-  const [scope, setScope] = useState<LeaderboardScope>('ALL');
   const [sortBy, setSortBy] = useState<LeaderboardSortBy>('xp');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [lastLiveUpdateIso, setLastLiveUpdateIso] = useState<string>(
@@ -77,18 +76,14 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
   const mergedLeaderboard = useMemo(() => {
     const map = new Map<string, CloudLeaderboardEntry>();
     const myNameNorm = progress.displayName.trim().toLowerCase();
-    const mySchoolNorm = progress.schoolName.trim().toLowerCase();
-
     // Only real users who have registered in the web app (from Firestore /leaderboard and /user_progress)
     cloudEntries.forEach((entry) => {
       if (!entry.displayName || !entry.displayName.trim()) return;
+      if (isIgnoredTestEntry(entry.syncKey, entry.displayName)) return;
       const entryNameNorm = entry.displayName.trim().toLowerCase();
-      const entrySchoolNorm = entry.schoolName.trim().toLowerCase();
       const isMe =
         entry.syncKey === mySyncKey ||
-        (myNameNorm.length > 0 &&
-          entryNameNorm === myNameNorm &&
-          (!mySchoolNorm || !entrySchoolNorm || entrySchoolNorm === mySchoolNorm));
+        (myNameNorm.length > 0 && entryNameNorm === myNameNorm);
 
       const key = isMe ? mySyncKey : entry.syncKey;
       const prev = map.get(key);
@@ -122,7 +117,11 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
     });
 
     // Ensure the currently logged-in / registered student is always represented with their real-time stats
-    if (progress.profileCompleted && progress.displayName.trim()) {
+    if (
+      progress.profileCompleted &&
+      progress.displayName.trim() &&
+      !isIgnoredTestEntry(mySyncKey, progress.displayName)
+    ) {
       const existingMe = map.get(mySyncKey);
       const mergedSolvedIds = Array.from(
         new Set([...(existingMe?.solvedIds || []), ...progress.solvedIds])
@@ -176,42 +175,16 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
   }, [cloudEntries, mySyncKey, progress, firebaseUser, sortBy]);
 
   const filteredLeaderboard = useMemo(() => {
-    const mySchoolNorm = (progress.schoolName || '').trim().toLowerCase();
-    const myClassNorm = (progress.className || '').trim().toLowerCase();
     const q = searchQuery.trim().toLowerCase();
 
     return mergedLeaderboard.filter((item) => {
-      if (scope === 'SAME_SCHOOL' && mySchoolNorm) {
-        if (
-          !item.isCurrentUser &&
-          !item.schoolName.toLowerCase().includes(mySchoolNorm)
-        ) {
-          return false;
-        }
-      }
-      if (scope === 'SAME_CLASS' && myClassNorm) {
-        if (
-          !item.isCurrentUser &&
-          item.className.toLowerCase() !== myClassNorm
-        ) {
-          return false;
-        }
-      }
       if (q) {
         const matchName = item.displayName.toLowerCase().includes(q);
-        const matchSchool = item.schoolName.toLowerCase().includes(q);
-        const matchClass = item.className.toLowerCase().includes(q);
-        if (!matchName && !matchSchool && !matchClass) return false;
+        if (!matchName) return false;
       }
       return true;
     });
-  }, [
-    mergedLeaderboard,
-    scope,
-    searchQuery,
-    progress.schoolName,
-    progress.className,
-  ]);
+  }, [mergedLeaderboard, searchQuery]);
 
   const myGlobalRank = useMemo(() => {
     const idx = mergedLeaderboard.findIndex((x) => x.isCurrentUser);
@@ -335,14 +308,6 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
                   <div className="text-base sm:text-lg font-bold leading-snug break-words">
                     {scholar.displayName}
                   </div>
-                  <div
-                    className={`text-xs sm:text-sm mt-0.5 break-words ${
-                      scholar.isCurrentUser ? 'text-zinc-300' : 'text-zinc-700'
-                    }`}
-                  >
-                    {scholar.schoolName || 'THPT Quốc Gia'}
-                    {scholar.className ? ` · Lớp ${scholar.className}` : ''}
-                  </div>
                 </div>
 
                 <div
@@ -363,37 +328,11 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
 
       {/* Filter & Search Bar */}
       <div className="p-3.5 sm:p-4 bg-zinc-100 border-2 border-zinc-900 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
-        {/* Scope Tabs */}
-        <div className="flex items-center flex-nowrap overflow-x-auto gap-1.5 min-w-0">
-          {(
-            [
-              {
-                id: 'ALL',
-                label: `Tất cả thành viên đã đăng ký (${mergedLeaderboard.length})`,
-              },
-              {
-                id: 'SAME_SCHOOL',
-                label: `Cùng Trường (${(progress.schoolName || 'THPT').slice(0, 22)})`,
-              },
-              {
-                id: 'SAME_CLASS',
-                label: `Cùng Lớp (${progress.className || '12'})`,
-              },
-            ] as const
-          ).map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setScope(tab.id)}
-              className={`coder-btn px-3 py-1.5 text-xs font-bold border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                scope === tab.id
-                  ? 'bg-black text-white border-black'
-                  : 'bg-white text-black border-zinc-900 hover:bg-zinc-200'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-black">
+          <Users className="w-4 h-4 shrink-0" />
+          <span>
+            Danh sách thành viên đã đăng ký ({mergedLeaderboard.length})
+          </span>
         </div>
 
         {/* Sort & Search */}
@@ -435,7 +374,6 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
             <tr className="border-b-2 border-black bg-zinc-100 text-xs uppercase font-bold text-zinc-800">
               <th className="py-3 px-3 sm:px-4 w-16">Hạng</th>
               <th className="py-3 px-3 sm:px-4">Học Sinh Đã Đăng Ký</th>
-              <th className="py-3 px-3 sm:px-4">Trường THPT & Lớp</th>
               <th className="py-3 px-3 sm:px-4 text-right">Bài Đã Giải</th>
               <th className="py-3 px-3 sm:px-4 text-right">Đề Thi</th>
               <th className="py-3 px-3 sm:px-4 text-right">Chuỗi Học</th>
@@ -479,23 +417,6 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
                         </span>
                       )}
                     </div>
-                    <div
-                      className={`text-[11px] mt-0.5 ${
-                        entry.isCurrentUser ? 'text-zinc-300' : 'text-zinc-500'
-                      }`}
-                    >
-                      Thiết bị đồng bộ: {entry.deviceLabel}
-                    </div>
-                  </td>
-                  <td className="py-3 px-3 sm:px-4">
-                    <div>{entry.schoolName || 'THPT Quốc Gia'}</div>
-                    <div
-                      className={`text-xs ${
-                        entry.isCurrentUser ? 'text-zinc-300' : 'text-zinc-600'
-                      }`}
-                    >
-                      {entry.className ? `Lớp: ${entry.className}` : 'THPT'}
-                    </div>
                   </td>
                   <td className="py-3 px-3 sm:px-4 text-right font-mono-tabular">
                     <span className="inline-flex items-center gap-1">
@@ -519,7 +440,7 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
             {filteredLeaderboard.length === 0 && (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={6}
                   className="py-8 px-4 text-center text-sm text-zinc-600"
                 >
                   <div className="flex flex-col items-center gap-2">

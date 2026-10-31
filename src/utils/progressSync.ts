@@ -26,7 +26,28 @@ import {
 const STORAGE_KEY = 'thpt_qt_tin_thpt_progress_v2';
 
 // Filter out automated test IDs so only genuine registered students appear on the Leaderboard
-const IGNORED_TEST_SYNC_KEYS = new Set(['std_c789ed49', 'std_6fe40b0c']);
+const IGNORED_TEST_SYNC_KEYS = new Set([
+  'std_c789ed49',
+  'std_6fe40b0c',
+  'acct_nguyenvana_cd174226_5b8a6e42',
+]);
+
+export function isIgnoredTestEntry(syncKey?: string, displayName?: string): boolean {
+  const key = (syncKey || '').trim();
+  if (
+    IGNORED_TEST_SYNC_KEYS.has(key) ||
+    key.startsWith('acct_nguyenvana') ||
+    key.startsWith('usr_test_') ||
+    key.startsWith('test_')
+  ) {
+    return true;
+  }
+  const normName = (displayName || '').trim().toLowerCase();
+  if (normName === 'nguyễn văn a' || normName === 'aaa' || normName.startsWith('test_')) {
+    return true;
+  }
+  return false;
+}
 
 export interface CloudLeaderboardEntry {
   syncKey: string;
@@ -268,7 +289,7 @@ export async function syncProgressWithCloud(
   let userExists = false;
 
   const lbRef =
-    syncKey && !IGNORED_TEST_SYNC_KEYS.has(syncKey)
+    syncKey && !isIgnoredTestEntry(syncKey, localState.displayName)
       ? doc(db, 'leaderboard', syncKey)
       : null;
   const userDocRef =
@@ -531,7 +552,7 @@ export function subscribeToCrossDeviceProgress(
 ): () => void {
   const unsubscribers: Array<() => void> = [];
 
-  if (syncKey && !IGNORED_TEST_SYNC_KEYS.has(syncKey)) {
+  if (syncKey && !isIgnoredTestEntry(syncKey)) {
     const lbRef = doc(db, 'leaderboard', syncKey);
     const unsubLb = onSnapshot(
       lbRef,
@@ -608,9 +629,8 @@ export function subscribeToLeaderboard(
     const byName = new Map<string, CloudLeaderboardEntry>();
 
     const upsert = (entry: CloudLeaderboardEntry) => {
-      if (IGNORED_TEST_SYNC_KEYS.has(entry.syncKey)) return;
       const cleanName = entry.displayName.trim();
-      if (!cleanName || cleanName === 'aaa') return;
+      if (!cleanName || isIgnoredTestEntry(entry.syncKey, cleanName)) return;
 
       const nameKey = cleanName.toLowerCase();
       const existing = byName.get(nameKey);
@@ -661,7 +681,7 @@ export function subscribeToLeaderboard(
     qLb,
     (snap) => {
       lbItems = snap.docs
-        .filter((d) => !IGNORED_TEST_SYNC_KEYS.has(d.id))
+        .filter((d) => !isIgnoredTestEntry(d.id, String(d.data()?.displayName || '')))
         .map((d) => {
           const data = d.data();
           const solvedIds = Array.isArray(data.solvedIds)

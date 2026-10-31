@@ -11,7 +11,7 @@ import {
 } from './codeEngine';
 import { INITIAL_PROBLEMS, generateInfiniteProblem } from './problemCatalog';
 import { MOCK_EXAMS, gradeMockExam } from './examCatalog';
-import { getCanonicalSyncKey, getDefaultProgress } from './progressSync';
+import { getCanonicalSyncKey, getDefaultProgress, isIgnoredTestEntry } from './progressSync';
 
 test('Python syntax analyzer detects missing colon and assignment in if condition', () => {
   const diagnostics = analyzeSyntax('if x = 5\n    print(x)', 'python');
@@ -214,5 +214,14 @@ test('getDefaultEditorCode pre-populates bare HTML skeleton without title, style
   assert.equal(getDefaultEditorCode(pyProb), '');
   assert.equal(getDefaultEditorCode(sqlProb), '');
 });
+
+test('isIgnoredTestEntry filters out automated test accounts (such as Nguyễn Văn A) while preserving real registered users', () => {
+  assert.equal(isIgnoredTestEntry('acct_nguyenvana_cd174226_5b8a6e42', 'Nguyễn Văn A'), true);
+  assert.equal(isIgnoredTestEntry('std_c789ed49', 'Lê Minh Tuấn'), true);
+  assert.equal(isIgnoredTestEntry('std_6fe40b0c', 'aaa'), true);
+  assert.equal(isIgnoredTestEntry('acct_tamdayne2009_86881558_1465c0a2', 'ITz_Tommy (KVM,AOSP Developers)'), false);
+  assert.equal(isIgnoredTestEntry('uid_QykxgoNKbjcGl11dJJhqbe5e22I2', 'Võ Nguyên Minh'), false);
+});
+
 
 
