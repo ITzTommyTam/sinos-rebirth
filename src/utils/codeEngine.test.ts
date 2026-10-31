@@ -6,6 +6,7 @@ import {
   executeAndGrade,
   getDefaultEditorCode,
   getLiveCommandOutput,
+  isBlockedDevToolsShortcut,
   runPythonCode,
   sanitizeHtmlForPreview,
 } from './codeEngine';
@@ -223,5 +224,18 @@ test('isIgnoredTestEntry filters out automated test accounts (such as Nguyễn V
   assert.equal(isIgnoredTestEntry('uid_QykxgoNKbjcGl11dJJhqbe5e22I2', 'Võ Nguyên Minh'), false);
 });
 
+test('Security: isBlockedDevToolsShortcut blocks F12 and DevTools/View-Source shortcuts while allowing standard typing and editor shortcuts', () => {
+  assert.equal(isBlockedDevToolsShortcut({ key: 'F12', code: 'F12', keyCode: 123 }), true);
+  assert.equal(isBlockedDevToolsShortcut({ keyCode: 123 }), true);
+  assert.equal(isBlockedDevToolsShortcut({ key: 'I', ctrlKey: true, shiftKey: true }), true);
+  assert.equal(isBlockedDevToolsShortcut({ key: 'j', ctrlKey: true, shiftKey: true }), true);
+  assert.equal(isBlockedDevToolsShortcut({ key: 'C', ctrlKey: true, shiftKey: true }), true);
+  assert.equal(isBlockedDevToolsShortcut({ key: 'i', metaKey: true, altKey: true }), true);
+  assert.equal(isBlockedDevToolsShortcut({ key: 'u', ctrlKey: true, shiftKey: false }), true);
 
-
+  // Standard editor shortcuts & typing must remain allowed
+  assert.equal(isBlockedDevToolsShortcut({ key: 'c', ctrlKey: true, shiftKey: false }), false);
+  assert.equal(isBlockedDevToolsShortcut({ key: 'v', ctrlKey: true, shiftKey: false }), false);
+  assert.equal(isBlockedDevToolsShortcut({ key: 'Enter', ctrlKey: true }), false);
+  assert.equal(isBlockedDevToolsShortcut({ key: 'a', code: 'KeyA' }), false);
+});

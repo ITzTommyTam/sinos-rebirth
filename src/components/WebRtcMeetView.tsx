@@ -11,10 +11,7 @@ import {
   PhoneOff,
   Radio,
   Send,
-  Sparkles,
   Users,
-  Video,
-  VideoOff,
 } from 'lucide-react';
 import {
   doc,
@@ -45,13 +42,14 @@ interface MeetChatMessage {
 }
 
 interface SignalEnvelope {
-  type: 'offer' | 'answer' | 'chat' | 'code' | 'hangup';
+  type: 'offer' | 'answer' | 'chat' | 'code' | 'hangup' | 'screen-status';
   roomId: string;
   senderId: string;
   senderName: string;
   sdp?: RTCSessionDescriptionInit;
   chat?: MeetChatMessage;
   sharedCode?: string;
+  isSharing?: boolean;
   timestamp: number;
 }
 
@@ -93,26 +91,26 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
   currentEditorCode,
   onApplySharedCodeToEditor,
 }) => {
-  const [roomId, setRoomId] = useState<string>('THPT-TIN-12A1');
+  const [roomId, setRoomId] = useState<string>('');
   const [role, setRole] = useState<'idle' | 'host' | 'guest'>('idle');
   const [connectionState, setConnectionState] = useState<string>('Chưa kết nối');
   const [statusBanner, setStatusBanner] = useState<string>(
-    'Nhập Mã Phòng (VD: THPT-TIN-12A1) rồi nhấn "Tạo Phòng Họp Mới (Host)" hoặc "Vào Phòng Họp (Guest)" để gọi Video/Audio WebRTC thời gian thực.'
+    'Nhập Mã Phòng Họp rồi nhấn "Tạo Phòng Họp Mới (Host)" hoặc "Vào Phòng Họp (Guest)" để kết nối Micro và chia sẻ màn hình.'
   );
   const [remotePeerName, setRemotePeerName] = useState<string>('Bạn học / Giáo viên');
 
-  // Media controls
-  const [isCameraOn, setIsCameraOn] = useState<boolean>(true);
+  // Media controls (Mic & Screen Share only — no webcam)
   const [isMicOn, setIsMicOn] = useState<boolean>(true);
   const [isScreenSharing, setIsScreenSharing] = useState<boolean>(false);
-  const [usingVirtualCamera, setUsingVirtualCamera] = useState<boolean>(false);
+  const [isPeerMicOn, setIsPeerMicOn] = useState<boolean>(true);
+  const [isPeerScreenSharing, setIsPeerScreenSharing] = useState<boolean>(false);
 
   // Collaborative Chat & Live Code Pad inside the Meet
   const [chatMessages, setChatMessages] = useState<MeetChatMessage[]>([
     {
       id: 'welcome-msg',
       sender: 'Hệ Thống Meet',
-      text: 'Chào mừng đến phòng học nhóm WebRTC! Bạn có thể bật Camera/Micro, chia sẻ màn hình và cùng sửa code trực tiếp.',
+      text: 'Chào mừng đến phòng học nhóm WebRTC! Bạn có thể bật Micro, chia sẻ màn hình và cùng sửa code trực tiếp.',
       time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
@@ -135,149 +133,44 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const peerLocalScreenStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
-  const virtualCanvasIntervalRef = useRef<number | null>(null);
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
   const firestoreUnsubRef = useRef<(() => void) | null>(null);
   const peerIdRef = useRef<string>(`peer_${Math.random().toString(36).slice(2, 9)}`);
 
-  const cleanRoomId =
-    roomId
-      .trim()
-      .toUpperCase()
-      .replace(/[^A-Z0-9_-]/g, '-')
-      .slice(0, 48) || 'THPT-TIN-12A1';
+  const cleanRoomId = roomId
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_-]/g, '-')
+    .slice(0, 48);
 
   const effectiveName = studentName.trim() || 'Học Sinh THPT';
 
-  // Helper: Create an animated virtual study camera stream when hardware camera is absent or blocked
-  const createVirtualCameraStream = (): MediaStream => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 640;
-    canvas.height = 360;
-    const ctx = canvas.getContext('2d');
-
-    if (virtualCanvasIntervalRef.current) {
-      window.clearInterval(virtualCanvasIntervalRef.current);
-    }
-
-    let tick = 0;
-    const drawFrame = () => {
-      if (!ctx) return;
-      tick += 1;
-      ctx.fillStyle = '#09090B';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // Border frame
-      ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(14, 14, canvas.width - 28, canvas.height - 28);
-
-      // Live pulse indicator
-      ctx.fillStyle = tick % 20 < 12 ? '#10B981' : '#059669';
-      ctx.beginPath();
-      ctx.arc(46, 46, 8, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = '#FFFFFF';
-      ctx.font = 'bold 16px monospace';
-      ctx.fillText('WEBRTC LIVE STREAM · CAMERA HỌC TẬP', 64, 52);
-
-      // Student avatar badge
-      ctx.fillStyle = '#27272A';
-      ctx.fillRect(40, 86, canvas.width - 80, 175);
-      ctx.strokeStyle = '#71717A';
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(40, 86, canvas.width - 80, 175);
-
-      ctx.fillStyle = '#38BDF8';
-      ctx.font = 'bold 26px monospace';
-      ctx.fillText(effectiveName.slice(0, 28), 64, 140);
-
-      ctx.fillStyle = '#E4E4E7';
-      ctx.font = '18px monospace';
-      ctx.fillText(
-        `${schoolName || 'THPT Quốc Gia'}${className ? ` · Lớp ${className}` : ''}`.slice(0, 38),
-        64,
-        180
-      );
-
-      ctx.fillStyle = '#A1A1AA';
-      ctx.font = '16px monospace';
-      ctx.fillText(
-        `Phòng: ${cleanRoomId} · Bài: ${selectedProblem.codeNumber}`,
-        64,
-        225
-      );
-
-      // Bottom timestamp
-      ctx.fillStyle = '#10B981';
-      ctx.font = 'bold 15px monospace';
-      ctx.fillText(
-        `Thời gian thực: ${new Date().toLocaleTimeString('vi-VN')} · Frame #${tick}`,
-        40,
-        315
-      );
-    };
-
-    drawFrame();
-    virtualCanvasIntervalRef.current = window.setInterval(drawFrame, 120);
-
-    const stream = canvas.captureStream(15);
-    setUsingVirtualCamera(true);
-    return stream;
-  };
-
-  // Acquire real camera/mic or fallback cleanly to Virtual Camera Stream
-  const ensureLocalMediaStream = async (preferVirtual = false): Promise<MediaStream> => {
-    if (localStreamRef.current && !preferVirtual) {
+  // Acquire microphone audio stream only (no webcam)
+  const ensureLocalMediaStream = async (): Promise<MediaStream> => {
+    if (localStreamRef.current) {
       return localStreamRef.current;
     }
 
-    if (!preferVirtual && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 640 }, height: { ideal: 360 } },
+        const audioOnly = await navigator.mediaDevices.getUserMedia({
+          video: false,
           audio: true,
         });
-        localStreamRef.current = stream;
-        setUsingVirtualCamera(false);
-        setIsCameraOn(true);
+        localStreamRef.current = audioOnly;
         setIsMicOn(true);
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-        }
-        return stream;
+        return audioOnly;
       } catch {
-        // Fallback to audio-only or virtual camera if webcam is unavailable
-        try {
-          const audioOnly = await navigator.mediaDevices.getUserMedia({
-            video: false,
-            audio: true,
-          });
-          const virtualVideo = createVirtualCameraStream();
-          const combined = new MediaStream([
-            ...virtualVideo.getVideoTracks(),
-            ...audioOnly.getAudioTracks(),
-          ]);
-          localStreamRef.current = combined;
-          if (localVideoRef.current) {
-            localVideoRef.current.srcObject = combined;
-          }
-          return combined;
-        } catch {
-          // Pure virtual stream when running on a desktop/browser without camera/mic hardware
-        }
+        // Fallback to empty stream if microphone hardware is unavailable
       }
     }
 
-    const fallbackStream = createVirtualCameraStream();
-    localStreamRef.current = fallbackStream;
-    setIsCameraOn(true);
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = fallbackStream;
-    }
-    return fallbackStream;
+    const emptyStream = new MediaStream();
+    localStreamRef.current = emptyStream;
+    return emptyStream;
   };
 
   // Broadcast signal across BroadcastChannel + localStorage
@@ -295,13 +188,13 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
     }
   };
 
-  // Setup DataChannel handlers for instant P2P chat and shared code
+  // Setup DataChannel handlers for instant P2P chat, shared code, and screen share status
   const bindDataChannel = (channel: RTCDataChannel) => {
     dataChannelRef.current = channel;
     channel.onopen = () => {
       setConnectionState('Đã kết nối P2P (Trực tuyến)');
       setStatusBanner(
-        `Đã kết nối WebRTC trực tiếp trong phòng ${cleanRoomId}! Camera, âm thanh, chat và bảng code đang đồng bộ thời gian thực.`
+        `Đã kết nối WebRTC trực tiếp trong phòng ${cleanRoomId}! Âm thanh, chia sẻ màn hình, chat và bảng code đang đồng bộ thời gian thực.`
       );
     };
     channel.onmessage = (event) => {
@@ -315,6 +208,8 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
           setSharedCode(data.sharedCode);
         } else if (data.type === 'peer-info' && data.senderName) {
           setRemotePeerName(data.senderName);
+        } else if (data.type === 'screen-status' && typeof data.isSharing === 'boolean') {
+          setIsPeerScreenSharing(data.isSharing);
         }
       } catch {
         // ignore malformed message
@@ -383,6 +278,10 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
     }
 
     pc.ontrack = (event) => {
+      if (event.track.kind === 'video') {
+        setIsPeerScreenSharing(true);
+        event.track.onended = () => setIsPeerScreenSharing(false);
+      }
       if (event.streams && event.streams[0]) {
         if (remoteVideoRef.current) {
           remoteVideoRef.current.srcObject = event.streams[0];
@@ -410,16 +309,37 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
       bindDataChannel(event.channel);
     };
 
+    // Pre-negotiate bidirectional audio & video transceivers so either Host or Guest (Bạn học / Giáo viên)
+    // can start/stop Screen Sharing at any time using replaceTrack without SDP renegotiation failures
     const localStream = await ensureLocalMediaStream();
     localStream.getTracks().forEach((track) => {
       pc.addTrack(track, localStream);
     });
+    const existingVideoTransceiver = pc
+      .getTransceivers()
+      .find((t) => t.receiver.track && t.receiver.track.kind === 'video');
+    if (!existingVideoTransceiver) {
+      pc.addTransceiver('video', { direction: 'sendrecv' });
+    }
+    if (screenStreamRef.current) {
+      const screenTrack = screenStreamRef.current.getVideoTracks()[0];
+      const videoTransceiver = pc
+        .getTransceivers()
+        .find((t) => t.receiver.track && t.receiver.track.kind === 'video');
+      if (videoTransceiver && screenTrack) {
+        await videoTransceiver.sender.replaceTrack(screenTrack);
+      }
+    }
 
     return pc;
   };
 
   // Start as Host (Create Offer & Publish to Room)
   const handleCreateRoomAsHost = async () => {
+    if (!cleanRoomId) {
+      setStatusBanner('[!] Vui lòng nhập Mã Phòng Họp trước khi tạo phòng!');
+      return;
+    }
     try {
       setRole('host');
       setConnectionState('Đang khởi tạo phòng...');
@@ -498,6 +418,10 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
 
   // Join as Guest (Read Offer from Room & Respond with Answer)
   const handleJoinRoomAsGuest = async () => {
+    if (!cleanRoomId) {
+      setStatusBanner('[!] Vui lòng nhập Mã Phòng Họp trước khi vào phòng!');
+      return;
+    }
     try {
       setRole('guest');
       setConnectionState('Đang tìm phòng họp...');
@@ -556,6 +480,13 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
       setRemotePeerName(hostDisplay);
       const pc = await createConfiguredPeerConnection();
       await pc.setRemoteDescription(new RTCSessionDescription(foundOffer));
+      pc.getTransceivers().forEach((t) => {
+        try {
+          t.direction = 'sendrecv';
+        } catch {
+          // ignore
+        }
+      });
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       const completeAnswer = (await gatherCompleteSdp(pc)) || answer;
@@ -616,6 +547,13 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
         setRole('guest');
         const pc = await createConfiguredPeerConnection();
         await pc.setRemoteDescription(new RTCSessionDescription(decoded));
+        pc.getTransceivers().forEach((t) => {
+          try {
+            t.direction = 'sendrecv';
+          } catch {
+            // ignore
+          }
+        });
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         const completeAnswer = (await gatherCompleteSdp(pc)) || answer;
@@ -665,8 +603,11 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
         );
       } else if (msg.type === 'code' && typeof msg.sharedCode === 'string') {
         setSharedCode(msg.sharedCode);
+      } else if (msg.type === 'screen-status' && typeof msg.isSharing === 'boolean') {
+        setIsPeerScreenSharing(msg.isSharing);
       } else if (msg.type === 'hangup') {
         setConnectionState('Người kia đã rời phòng');
+        setIsPeerScreenSharing(false);
         setStatusBanner(`${msg.senderName} đã kết thúc cuộc gọi.`);
       }
     };
@@ -698,13 +639,16 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
     };
   }, [cleanRoomId]);
 
-  // Initialize local camera preview on mount
+  // Initialize local audio stream on mount
   useEffect(() => {
     ensureLocalMediaStream().catch(() => {});
     return () => {
       cleanupPeerConnection();
-      if (virtualCanvasIntervalRef.current) {
-        window.clearInterval(virtualCanvasIntervalRef.current);
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach((t) => t.stop());
+      }
+      if (peerLocalScreenStreamRef.current) {
+        peerLocalScreenStreamRef.current.getTracks().forEach((t) => t.stop());
       }
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((t) => t.stop());
@@ -713,24 +657,59 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleToggleCamera = () => {
-    if (!localStreamRef.current) return;
-    const videoTracks = localStreamRef.current.getVideoTracks();
-    const nextState = !isCameraOn;
-    videoTracks.forEach((t) => {
-      t.enabled = nextState;
-    });
-    setIsCameraOn(nextState);
+  const handleToggleMic = () => {
+    if (localStreamRef.current) {
+      const audioTracks = localStreamRef.current.getAudioTracks();
+      audioTracks.forEach((t) => {
+        t.enabled = !isMicOn;
+      });
+    }
+    setIsMicOn((prev) => !prev);
   };
 
-  const handleToggleMic = () => {
-    if (!localStreamRef.current) return;
-    const audioTracks = localStreamRef.current.getAudioTracks();
-    const nextState = !isMicOn;
-    audioTracks.forEach((t) => {
-      t.enabled = nextState;
-    });
-    setIsMicOn(nextState);
+  const handleTogglePeerMic = () => {
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.muted = isPeerMicOn;
+    }
+    setIsPeerMicOn((prev) => !prev);
+  };
+
+  const notifyPeerScreenStatus = (isSharing: boolean) => {
+    if (dataChannelRef.current && dataChannelRef.current.readyState === 'open') {
+      dataChannelRef.current.send(
+        JSON.stringify({ type: 'screen-status', isSharing })
+      );
+    }
+    if (cleanRoomId) {
+      emitLocalSignal({
+        type: 'screen-status',
+        roomId: cleanRoomId,
+        senderId: peerIdRef.current,
+        senderName: effectiveName,
+        isSharing,
+        timestamp: Date.now(),
+      });
+    }
+  };
+
+  const attachTrackToPeerConnection = async (screenTrack: MediaStreamTrack | null, stream?: MediaStream) => {
+    if (!pcRef.current) return;
+    const videoTransceiver = pcRef.current
+      .getTransceivers()
+      .find((t) => t.receiver.track && t.receiver.track.kind === 'video');
+    if (videoTransceiver) {
+      videoTransceiver.direction = 'sendrecv';
+      await videoTransceiver.sender.replaceTrack(screenTrack);
+      return;
+    }
+    const sender = pcRef.current
+      .getSenders()
+      .find((s) => s.track && s.track.kind === 'video');
+    if (sender) {
+      await sender.replaceTrack(screenTrack);
+    } else if (screenTrack && stream) {
+      pcRef.current.addTrack(screenTrack, stream);
+    }
   };
 
   const handleToggleScreenShare = async () => {
@@ -740,20 +719,16 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
     }
 
     if (isScreenSharing) {
-      const camStream = await ensureLocalMediaStream();
-      const videoTrack = camStream.getVideoTracks()[0];
-      if (pcRef.current && videoTrack) {
-        const sender = pcRef.current
-          .getSenders()
-          .find((s) => s.track && s.track.kind === 'video');
-        if (sender) {
-          await sender.replaceTrack(videoTrack);
-        }
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach((t) => t.stop());
+        screenStreamRef.current = null;
       }
+      await attachTrackToPeerConnection(null);
       if (localVideoRef.current) {
-        localVideoRef.current.srcObject = camStream;
+        localVideoRef.current.srcObject = null;
       }
       setIsScreenSharing(false);
+      notifyPeerScreenStatus(false);
       return;
     }
 
@@ -761,27 +736,76 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
       const displayStream = await navigator.mediaDevices.getDisplayMedia({
         video: true,
       });
+      screenStreamRef.current = displayStream;
       const screenTrack = displayStream.getVideoTracks()[0];
-      if (pcRef.current && screenTrack) {
-        const sender = pcRef.current
-          .getSenders()
-          .find((s) => s.track && s.track.kind === 'video');
-        if (sender) {
-          await sender.replaceTrack(screenTrack);
-        }
+      if (screenTrack) {
+        await attachTrackToPeerConnection(screenTrack, displayStream);
       }
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = displayStream;
       }
       setIsScreenSharing(true);
+      notifyPeerScreenStatus(true);
       screenTrack.onended = () => {
         setIsScreenSharing(false);
-        ensureLocalMediaStream().then((s) => {
-          if (localVideoRef.current) localVideoRef.current.srcObject = s;
-        });
+        notifyPeerScreenStatus(false);
+        screenStreamRef.current = null;
+        attachTrackToPeerConnection(null).catch(() => {});
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = null;
+        }
       };
     } catch {
       setStatusBanner('Đã hủy thao tác chia sẻ màn hình.');
+    }
+  };
+
+  // Allows Bạn học / Giáo viên panel to start/stop screen sharing directly or display incoming P2P screen stream
+  const handleTogglePeerScreenShare = async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      setStatusBanner('Trình duyệt hiện tại không hỗ trợ API chia sẻ màn hình (getDisplayMedia).');
+      return;
+    }
+
+    if (isPeerScreenSharing) {
+      if (peerLocalScreenStreamRef.current) {
+        peerLocalScreenStreamRef.current.getTracks().forEach((t) => t.stop());
+        peerLocalScreenStreamRef.current = null;
+      }
+      await attachTrackToPeerConnection(null);
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = remoteStreamRef.current;
+      }
+      setIsPeerScreenSharing(false);
+      notifyPeerScreenStatus(false);
+      return;
+    }
+
+    try {
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+      });
+      peerLocalScreenStreamRef.current = displayStream;
+      const screenTrack = displayStream.getVideoTracks()[0];
+      if (screenTrack) {
+        await attachTrackToPeerConnection(screenTrack, displayStream);
+      }
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = displayStream;
+      }
+      setIsPeerScreenSharing(true);
+      notifyPeerScreenStatus(true);
+      screenTrack.onended = () => {
+        setIsPeerScreenSharing(false);
+        notifyPeerScreenStatus(false);
+        peerLocalScreenStreamRef.current = null;
+        attachTrackToPeerConnection(null).catch(() => {});
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = remoteStreamRef.current;
+        }
+      };
+    } catch {
+      setStatusBanner('Đã hủy thao tác chia sẻ màn hình của Bạn học / Giáo viên.');
     }
   };
 
@@ -856,11 +880,8 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
               <span>PHÒNG HỌP NHÓM & CHỮA BÀI TRỰC TUYẾN WEBRTC (PEER-TO-PEER)</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-bold text-black">
-              Gọi Video / Audio Họp Nhóm & Đồng Bộ Code Trực Tiếp
+              Họp Nhóm Âm Thanh, Chia Sẻ Màn Hình & Đồng Bộ Code Trực Tiếp
             </h1>
-            <p className="text-sm text-zinc-700">
-              Kết nối trực tiếp qua giao thức chuẩn WebRTC (Camera, Micro, Chia sẻ màn hình, Chat & Bảng Code chung). Hỗ trợ kết nối tức thì giữa các tab/thiết bị qua Mã Phòng hoặc Mã P2P.
-            </p>
           </div>
 
           <div className="px-4 py-2.5 bg-black text-white text-xs sm:text-sm font-mono-tabular font-bold shrink-0 self-start lg:self-center">
@@ -884,19 +905,20 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
                 type="text"
                 value={roomId}
                 onChange={(e) => setRoomId(e.target.value)}
-                placeholder="VD: THPT-TIN-12A1"
+                placeholder="Nhập mã phòng họp..."
                 className="w-full px-3 py-2 text-sm sm:text-base font-mono-tabular font-bold bg-white border-2 border-black text-black focus:outline-none min-w-0"
               />
               <button
                 type="button"
+                disabled={!cleanRoomId}
                 onClick={() => {
-                  if (navigator.clipboard) {
+                  if (navigator.clipboard && cleanRoomId) {
                     navigator.clipboard.writeText(cleanRoomId);
                   }
                   setCopiedRoom(true);
                   setTimeout(() => setCopiedRoom(false), 2000);
                 }}
-                className="coder-btn px-3 py-2 text-xs sm:text-sm font-bold bg-white border-2 border-black text-black hover:bg-zinc-200 flex items-center gap-1 shrink-0 cursor-pointer"
+                className="coder-btn px-3 py-2 text-xs sm:text-sm font-bold bg-white border-2 border-black text-black hover:bg-zinc-200 disabled:opacity-50 flex items-center gap-1 shrink-0 cursor-pointer"
               >
                 {copiedRoom ? (
                   <Check className="w-4 h-4" />
@@ -954,11 +976,6 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
         {/* Status Banner */}
         <div className="p-3 bg-white border border-black text-xs sm:text-sm text-black flex items-center justify-between gap-2">
           <span>{statusBanner}</span>
-          {usingVirtualCamera && (
-            <span className="px-2 py-0.5 bg-zinc-900 text-emerald-400 font-mono-tabular text-xs font-bold shrink-0">
-              Camera Học Tập Ảo Đang Bật
-            </span>
-          )}
         </div>
 
         {/* Optional Cross-Network Manual SDP Exchange Panel */}
@@ -1025,7 +1042,7 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
 
       {/* Dual Video Stage (Local Stream + Remote Stream) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* Local Participant Video */}
+        {/* Local Participant Stage (Audio + Screen Share Only) */}
         <div className="border-2 border-black bg-zinc-950 text-white overflow-hidden flex flex-col justify-between">
           <div className="px-4 py-2.5 bg-black border-b border-zinc-800 flex items-center justify-between gap-2 text-xs sm:text-sm">
             <span className="font-bold text-white truncate">
@@ -1034,9 +1051,9 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
             <span className="text-emerald-400 font-mono-tabular text-xs">
               {isScreenSharing
                 ? 'Đang chia sẻ màn hình'
-                : usingVirtualCamera
-                  ? 'Stream Bảng Học Tập'
-                  : 'Camera Trực Tiếp'}
+                : isMicOn
+                  ? 'Micro đang bật'
+                  : 'Micro đang tắt'}
             </span>
           </div>
 
@@ -1046,37 +1063,30 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
               autoPlay
               playsInline
               muted
-              className="w-full h-full object-cover"
+              className={`w-full h-full object-contain ${isScreenSharing ? 'block' : 'hidden'}`}
             />
-            {!isCameraOn && (
-              <div className="absolute inset-0 bg-zinc-950/95 flex flex-col items-center justify-center gap-2 text-zinc-400">
-                <VideoOff className="w-10 h-10" />
-                <span className="text-sm font-bold">Camera đang tắt</span>
+            {!isScreenSharing && (
+              <div className="absolute inset-0 bg-zinc-950 flex flex-col items-center justify-center p-6 text-center gap-2.5 text-zinc-300">
+                {isMicOn ? (
+                  <Mic className="w-10 h-10 text-emerald-400" />
+                ) : (
+                  <MicOff className="w-10 h-10 text-red-400" />
+                )}
+                <div className="text-sm sm:text-base font-bold text-white">
+                  {isMicOn ? 'Micro Đang Bật (Chế Độ Âm Thanh)' : 'Micro Đang Tắt'}
+                </div>
+                <p className="text-xs text-zinc-400 max-w-sm">
+                  Nhấn nút <strong>Chia Sẻ Màn Hình</strong> bên dưới nếu bạn muốn trình chiếu màn hình bài làm cho các thành viên trong phòng.
+                </p>
               </div>
             )}
           </div>
 
-          {/* Media Control Bar */}
+          {/* Media Control Bar (Mic & Screen Share Only) */}
           <div className="p-3 bg-black border-t border-zinc-800 flex flex-wrap items-center justify-center gap-2.5">
             <button
               type="button"
-              onClick={handleToggleCamera}
-              className={`px-3.5 py-2 text-xs sm:text-sm font-bold border transition-colors flex items-center gap-1.5 cursor-pointer ${
-                isCameraOn
-                  ? 'bg-zinc-900 text-white border-zinc-700 hover:bg-zinc-800'
-                  : 'bg-red-700 text-white border-red-600'
-              }`}
-            >
-              {isCameraOn ? (
-                <Video className="w-4 h-4" />
-              ) : (
-                <VideoOff className="w-4 h-4" />
-              )}
-              <span>{isCameraOn ? 'Tắt Camera' : 'Bật Camera'}</span>
-            </button>
-
-            <button
-              type="button"
+              data-testid="webrtc-toggle-mic-btn"
               onClick={handleToggleMic}
               className={`px-3.5 py-2 text-xs sm:text-sm font-bold border transition-colors flex items-center gap-1.5 cursor-pointer ${
                 isMicOn
@@ -1094,6 +1104,7 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
 
             <button
               type="button"
+              data-testid="webrtc-toggle-screen-btn"
               onClick={handleToggleScreenShare}
               className={`px-3.5 py-2 text-xs sm:text-sm font-bold border transition-colors flex items-center gap-1.5 cursor-pointer ${
                 isScreenSharing
@@ -1104,26 +1115,19 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
               <MonitorUp className="w-4 h-4" />
               <span>{isScreenSharing ? 'Dừng Chia Sẻ' : 'Chia Sẻ Màn Hình'}</span>
             </button>
-
-            <button
-              type="button"
-              onClick={() => ensureLocalMediaStream(true)}
-              className="px-3 py-2 text-xs sm:text-sm font-bold bg-zinc-900 text-sky-300 border border-zinc-700 hover:bg-zinc-800 flex items-center gap-1.5 cursor-pointer"
-            >
-              <Sparkles className="w-4 h-4" />
-              <span>Camera Ảo</span>
-            </button>
           </div>
         </div>
 
-        {/* Remote Participant Video */}
+        {/* Remote Participant Stage (Bạn học / Giáo viên — Audio + Screen Share) */}
         <div className="border-2 border-black bg-zinc-950 text-white overflow-hidden flex flex-col justify-between">
           <div className="px-4 py-2.5 bg-black border-b border-zinc-800 flex items-center justify-between gap-2 text-xs sm:text-sm">
             <span className="font-bold text-white truncate">
               Đối tác: {remotePeerName}
             </span>
             <span className="text-sky-400 font-mono-tabular text-xs">
-              Phòng: {cleanRoomId}
+              {isPeerScreenSharing
+                ? 'Đang chia sẻ màn hình'
+                : `Phòng: ${cleanRoomId || '(Chưa nhập)'}`}
             </span>
           </div>
 
@@ -1132,28 +1136,58 @@ export const WebRtcMeetView: React.FC<WebRtcMeetViewProps> = ({
               ref={remoteVideoRef}
               autoPlay
               playsInline
-              className="w-full h-full object-cover"
+              className={`w-full h-full object-contain ${isPeerScreenSharing ? 'block' : 'hidden'}`}
             />
-            {connectionState !== 'Đã kết nối P2P (Trực tuyến)' && (
+            {!isPeerScreenSharing && (
               <div className="absolute inset-0 bg-zinc-950/90 flex flex-col items-center justify-center p-6 text-center space-y-2">
                 <Users className="w-10 h-10 text-zinc-400" />
                 <div className="text-sm sm:text-base font-bold text-white">
-                  {role === 'idle'
-                    ? 'Chưa bắt đầu phiên gọi WebRTC'
-                    : 'Đang chờ luồng Video/Audio từ thành viên trong phòng...'}
+                  {connectionState === 'Đã kết nối P2P (Trực tuyến)'
+                    ? `${remotePeerName} đang kết nối âm thanh`
+                    : role === 'idle'
+                      ? 'Chưa bắt đầu phiên gọi WebRTC'
+                      : 'Đang chờ luồng Âm thanh / Màn hình từ thành viên trong phòng...'}
                 </div>
                 <p className="text-xs sm:text-sm text-zinc-400 max-w-md">
-                  Mẹo thử nhanh: Bạn có thể mở thêm 1 tab trình duyệt thứ hai, nhập cùng Mã Phòng <strong>{cleanRoomId}</strong> và bấm <strong>Vào Phòng Họp (Guest)</strong> để kiểm tra gọi Video 2 chiều ngay lập tức!
+                  Bạn học / Giáo viên có thể nhấn nút <strong>Chia Sẻ Màn Hình</strong> bên dưới (hoặc từ thiết bị đối tác) để trình chiếu bài giảng và code trực tiếp.
                 </p>
               </div>
             )}
           </div>
 
-          <div className="p-3 bg-black border-t border-zinc-800 text-xs sm:text-sm text-zinc-400 flex items-center justify-between">
-            <span>Kênh truyền: RTCPeerConnection + RTCDataChannel</span>
-            <span className="text-emerald-400 font-mono-tabular font-bold">
-              STUN Google 19302
-            </span>
+          {/* Peer Media Control Bar (Mic & Screen Share for Bạn học / Giáo viên) */}
+          <div className="p-3 bg-black border-t border-zinc-800 flex flex-wrap items-center justify-center gap-2.5">
+            <button
+              type="button"
+              data-testid="webrtc-peer-toggle-mic-btn"
+              onClick={handleTogglePeerMic}
+              className={`px-3.5 py-2 text-xs sm:text-sm font-bold border transition-colors flex items-center gap-1.5 cursor-pointer ${
+                isPeerMicOn
+                  ? 'bg-zinc-900 text-white border-zinc-700 hover:bg-zinc-800'
+                  : 'bg-red-700 text-white border-red-600'
+              }`}
+            >
+              {isPeerMicOn ? (
+                <Mic className="w-4 h-4" />
+              ) : (
+                <MicOff className="w-4 h-4" />
+              )}
+              <span>{isPeerMicOn ? 'Tắt Âm Đối Tác' : 'Bật Âm Đối Tác'}</span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="webrtc-peer-toggle-screen-btn"
+              onClick={handleTogglePeerScreenShare}
+              className={`px-3.5 py-2 text-xs sm:text-sm font-bold border transition-colors flex items-center gap-1.5 cursor-pointer ${
+                isPeerScreenSharing
+                  ? 'bg-emerald-500 text-black border-emerald-400'
+                  : 'bg-zinc-900 text-white border-zinc-700 hover:bg-zinc-800'
+              }`}
+            >
+              <MonitorUp className="w-4 h-4" />
+              <span>{isPeerScreenSharing ? 'Dừng Chia Sẻ' : 'Chia Sẻ Màn Hình'}</span>
+            </button>
           </div>
         </div>
       </div>

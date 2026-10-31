@@ -35,6 +35,7 @@ import {
   autoUppercaseSql,
   executeAndGrade,
   getDefaultEditorCode,
+  isBlockedDevToolsShortcut,
   sanitizeHtmlForPreview,
 } from './utils/codeEngine';
 import { ExamGradingResult, MOCK_EXAMS } from './utils/examCatalog';
@@ -116,6 +117,55 @@ export default function App() {
   const [googleModalClass, setGoogleModalClass] = useState<string>('');
   const [googleModalReason, setGoogleModalReason] = useState<string>('');
   const [googleModalError, setGoogleModalError] = useState<string>('');
+  const [securityAlertMessage, setSecurityAlertMessage] = useState<string | null>(null);
+  const securityAlertTimerRef = useRef<number | null>(null);
+
+  // Global F12 / DevTools shortcut & right-click inspect blocker
+  useEffect(() => {
+    const triggerSecurityNotice = (msg: string) => {
+      setSecurityAlertMessage(msg);
+      if (securityAlertTimerRef.current) {
+        window.clearTimeout(securityAlertTimerRef.current);
+      }
+      securityAlertTimerRef.current = window.setTimeout(() => {
+        setSecurityAlertMessage(null);
+      }, 3000);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (isBlockedDevToolsShortcut(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        triggerSecurityNotice(
+          'Bảo mật hệ thống: Đã vô hiệu hóa phím F12 và Công cụ nhà phát triển (DevTools).'
+        );
+        return false;
+      }
+      return undefined;
+    };
+
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      triggerSecurityNotice(
+        'Bảo mật hệ thống: Đã khóa chuột phải và kiểm tra phần tử (Inspect).'
+      );
+      return false;
+    };
+
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    document.addEventListener('keydown', handleKeyDown, { capture: true });
+    window.addEventListener('contextmenu', handleContextMenu, { capture: true });
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, { capture: true });
+      document.removeEventListener('keydown', handleKeyDown, { capture: true });
+      window.removeEventListener('contextmenu', handleContextMenu, { capture: true });
+      if (securityAlertTimerRef.current) {
+        window.clearTimeout(securityAlertTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -740,6 +790,24 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-white text-black">
+      {/* F12 / DevTools Blocked Security Toast */}
+      {securityAlertMessage && (
+        <div
+          data-testid="devtools-blocked-toast"
+          role="alert"
+          className="fixed bottom-4 right-4 z-[100] max-w-md bg-black text-white border-2 border-black px-3.5 py-2.5 text-xs font-bold shadow-[4px_4px_0px_0px_#52525b] flex items-center justify-between gap-3 animate-fade-slide"
+        >
+          <span>[!] {securityAlertMessage}</span>
+          <button
+            type="button"
+            onClick={() => setSecurityAlertMessage(null)}
+            className="px-1.5 py-0.5 text-[10px] font-bold bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-600 shrink-0 cursor-pointer"
+          >
+            Đóng
+          </button>
+        </div>
+      )}
+
       {/* In-App Google Account & Cloud Sync Modal (Never auto-closes on popup block or static domains) */}
       {showGoogleAuthModal && (
         <div

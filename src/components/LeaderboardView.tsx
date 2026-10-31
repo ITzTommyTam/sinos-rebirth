@@ -219,9 +219,6 @@ export const LeaderboardView: React.FC<LeaderboardViewProps> = ({
             <Trophy className="w-6 h-6 sm:w-7 sm:h-7 text-black shrink-0" />
             <span>Bảng Xếp Hạng Thành Viên Đã Đăng Ký</span>
           </h1>
-          <p className="text-xs sm:text-sm text-zinc-700 leading-relaxed">
-            Bảng xếp hạng chỉ hiển thị các học sinh thực tế đã đăng ký tài khoản trên web. Điểm XP, số bài đã giải và thứ hạng được tự động đồng bộ theo thời gian thực giữa mọi thiết bị.
-          </p>
         </div>
 
         {/* My Current Standing Card (Auto-synced) */}

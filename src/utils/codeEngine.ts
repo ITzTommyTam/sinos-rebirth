@@ -28,6 +28,47 @@ export function sanitizeHtmlForPreview(rawHtml: string): string {
     .replace(/(?:href|src|action|formaction)\s*=\s*(?:"\s*(?:javascript|vbscript|data\s*:\s*text\/html)[^"]*"|'\s*(?:javascript|vbscript|data\s*:\s*text\/html)[^']*')/gi, 'href="#"');
 }
 
+export interface ShortcutEventLike {
+  key?: string;
+  code?: string;
+  keyCode?: number;
+  ctrlKey?: boolean;
+  shiftKey?: boolean;
+  metaKey?: boolean;
+  altKey?: boolean;
+}
+
+/**
+ * Pure helper that detects whether a keyboard event matches F12 or browser Developer Tools / View Source shortcuts:
+ * - F12 (key === 'F12', code === 'F12', or keyCode === 123)
+ * - Ctrl+Shift+I / Ctrl+Shift+J / Ctrl+Shift+C / Ctrl+Shift+K (Windows/Linux DevTools & Console/Inspector)
+ * - Cmd+Option+I / Cmd+Option+J / Cmd+Option+C / Cmd+Option+K / Cmd+Option+U (macOS DevTools & View Source)
+ * - Ctrl+U (View Page Source)
+ */
+export function isBlockedDevToolsShortcut(e: ShortcutEventLike): boolean {
+  if (!e) return false;
+  const upperKey = (e.key || '').toUpperCase();
+  const upperCode = (e.code || '').toUpperCase();
+
+  if (upperKey === 'F12' || upperCode === 'F12' || e.keyCode === 123) {
+    return true;
+  }
+
+  if (e.ctrlKey && e.shiftKey && ['I', 'J', 'C', 'K'].includes(upperKey)) {
+    return true;
+  }
+
+  if (e.metaKey && e.altKey && ['I', 'J', 'C', 'K', 'U'].includes(upperKey)) {
+    return true;
+  }
+
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && upperKey === 'U') {
+    return true;
+  }
+
+  return false;
+}
+
 const SQL_KEYWORDS_AND_FUNCTIONS = new Set([
   // SQL Functions (Aggregate, Scalar, String, Date, Math, Null-handling)
   'COUNT', 'SUM', 'AVG', 'MAX', 'MIN', 'ROUND', 'ABS', 'CEIL', 'CEILING', 'FLOOR',
