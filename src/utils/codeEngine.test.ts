@@ -2,12 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   analyzeSyntax,
+  autoUppercaseSql,
   executeAndGrade,
+  getDefaultEditorCode,
   getLiveCommandOutput,
+  runPythonCode,
+  sanitizeHtmlForPreview,
 } from './codeEngine';
 import { INITIAL_PROBLEMS, generateInfiniteProblem } from './problemCatalog';
 import { MOCK_EXAMS, gradeMockExam } from './examCatalog';
-import { getDefaultProgress } from './progressSync';
+import { getCanonicalSyncKey, getDefaultProgress } from './progressSync';
 
 test('Python syntax analyzer detects missing colon and assignment in if condition', () => {
   const diagnostics = analyzeSyntax('if x = 5\n    print(x)', 'python');
@@ -26,7 +30,7 @@ test('SQL syntax analyzer detects SELECT without FROM and typo SELCET', () => {
   assert.equal(diag2.some((d) => d.severity === 'error'), true);
 });
 
-test('Problem catalog pre-loads 400 problems (100 Python, 100 HTML, 100 SQL, 100 Algorithm) and all pass grading', () => {
+test('Problem catalog pre-loads 400 completely unique problems (100 Python, 100 HTML, 100 SQL, 100 Algorithm) and all 400 pass grading', () => {
   assert.equal(INITIAL_PROBLEMS.length, 400);
   const pyProbs = INITIAL_PROBLEMS.filter((p) => p.categoryMode === 'python');
   const htmlProbs = INITIAL_PROBLEMS.filter((p) => p.categoryMode === 'html');
@@ -38,21 +42,36 @@ test('Problem catalog pre-loads 400 problems (100 Python, 100 HTML, 100 SQL, 100
   assert.equal(sqlProbs.length, 100);
   assert.equal(algoProbs.length, 100);
 
-  // Sample check across all 4 modes and difficulties
-  const sampleCheck = [
-    ...pyProbs.slice(0, 8),
-    ...htmlProbs.slice(0, 8),
-    ...sqlProbs.slice(0, 8),
-    ...algoProbs.slice(0, 8),
-  ];
-  for (const prob of sampleCheck) {
-    const report = executeAndGrade(prob, prob.solutionCode);
+  // Verify 100% uniqueness across all 400 problems
+  const ids = new Set(INITIAL_PROBLEMS.map((p) => p.id));
+  const codeNumbers = new Set(INITIAL_PROBLEMS.map((p) => p.codeNumber));
+  const titles = new Set(INITIAL_PROBLEMS.map((p) => p.title.trim().toLowerCase()));
+  const descriptions = new Set(INITIAL_PROBLEMS.map((p) => p.description.trim().toLowerCase()));
+  const specs = new Set(INITIAL_PROBLEMS.map((p) => p.taskSpecification.trim().toLowerCase()));
+
+  assert.equal(ids.size, 400, 'Every problem must have a unique id');
+  assert.equal(codeNumbers.size, 400, 'Every problem must have a unique codeNumber');
+  assert.equal(titles.size, 400, 'Every problem must have a unique title');
+  assert.equal(descriptions.size, 400, 'Every problem must have a unique description');
+  assert.equal(specs.size, 400, 'Every problem must have a unique taskSpecification');
+
+  const failures: string[] = [];
+  for (const prob of INITIAL_PROBLEMS) {
     assert.equal(
-      report.passedAll,
-      true,
-      `Failed problem ${prob.id}: ${JSON.stringify(report.testResults)}`
+      /\(Bài #\d+\)/i.test(prob.title),
+      false,
+      `Problem ${prob.codeNumber} has repetitive template suffix in title: ${prob.title}`
     );
+    const report = executeAndGrade(prob, prob.solutionCode);
+    if (!report.passedAll) {
+      failures.push(
+        `${prob.codeNumber} (${prob.id}): ${JSON.stringify(
+          report.testResults.filter((t) => !t.passed)
+        )} | diag: ${JSON.stringify(report.diagnostics)}`
+      );
+    }
   }
+  assert.deepEqual(failures, []);
 });
 
 test('Exam catalog pre-loads 100 THPT Quốc Gia GDPT 2018 mock exams without V-ACT', () => {
@@ -110,3 +129,90 @@ test('getLiveCommandOutput handles empty editor and returns live output for Pyth
   assert.equal(pyRes.currentStatement, 'print(x)');
   assert.equal(pyRes.liveOutput.includes('72000'), true);
 });
+
+test('Security: Python sandbox blocks DOM, storage, network, and prototype access while allowing strings containing those words', () => {
+  const blockedPayloads = [
+    'print(window.location)',
+    'x = localStorage.getItem("token")',
+    'fetch("https://evil.example")',
+    'print(document.cookie)',
+    'x = "".__proto__',
+  ];
+  for (const payload of blockedPayloads) {
+    const res = runPythonCode(payload, '');
+    assert.equal(Boolean(res.error && res.error.includes('SecurityError')), true, `Expected payload to be blocked: ${payload}`);
+  }
+
+  // Legitimate string literal containing the word "window" must still execute normally
+  const safeString = runPythonCode('print("Sliding window algorithm")', '');
+  assert.equal(safeString.error, undefined);
+  assert.equal(safeString.stdout, 'Sliding window algorithm');
+});
+
+test('Security: sanitizeHtmlForPreview strips script tags, event handlers, and javascript URIs', () => {
+  const maliciousHtml =
+    '<h1>Bảng điểm</h1><script>alert(document.cookie)</script><img src="x" onerror="alert(1)" alt="Anh"><a href="javascript:alert(2)">Link</a><iframe src="https://evil.com"></iframe>';
+  const cleaned = sanitizeHtmlForPreview(maliciousHtml);
+  assert.equal(cleaned.includes('<script'), false);
+  assert.equal(cleaned.includes('onerror'), false);
+  assert.equal(cleaned.includes('javascript:'), false);
+  assert.equal(cleaned.includes('<iframe'), false);
+  assert.equal(cleaned.includes('<h1>Bảng điểm</h1>'), true);
+});
+
+test('Cross-device sync: getCanonicalSyncKey maps PC and Phone with the same email to the exact same syncKey', () => {
+  const pcState = {
+    ...getDefaultProgress(),
+    userId: 'firebase_uid_pc_123',
+    cloudEmail: 'HocSinh2009@gmail.com ',
+    displayName: 'Nguyễn Văn A (PC)',
+  };
+  const phoneState = {
+    ...getDefaultProgress(),
+    userId: 'google_hocsinh2009_gmail_com',
+    cloudEmail: 'hocsinh2009@gmail.com',
+    displayName: 'Nguyễn Văn A (Mobile)',
+  };
+
+  const pcKey = getCanonicalSyncKey(pcState, 'firebase_uid_pc_123', 'HocSinh2009@gmail.com');
+  const phoneKey = getCanonicalSyncKey(phoneState, null, null);
+  assert.equal(pcKey, phoneKey);
+  assert.equal(pcKey.startsWith('acct_'), true);
+});
+
+test('SQL auto-uppercase converts only SQL functions and keywords to uppercase while preserving column/table names, string literals, and exact length', () => {
+  const rawSql = "select ma_hs, ho_ten, count(*) as so_luong from hoc_sinh where xep_loai = 'Giỏi' order by diem_tb desc;";
+  const upperSql = autoUppercaseSql(rawSql);
+  assert.equal(
+    upperSql,
+    "SELECT ma_hs, ho_ten, COUNT(*) AS so_luong FROM hoc_sinh WHERE xep_loai = 'Giỏi' ORDER BY diem_tb DESC;"
+  );
+  assert.equal(upperSql.length, rawSql.length);
+
+  // Verify snake_case column names starting with a function prefix (e.g. MIN_diem, MAX_diem) revert to lowercase
+  const snakeCaseProgress = autoUppercaseSql('select MIN_diem, MAX_diem, COUNT_hs from bang_diem');
+  assert.equal(snakeCaseProgress, 'SELECT min_diem, max_diem, count_hs FROM bang_diem');
+});
+
+test('getDefaultEditorCode pre-populates bare HTML skeleton without title, style, or comments for HTML problems and empty string for Python/SQL', () => {
+  const htmlProb = INITIAL_PROBLEMS.find((p) => p.language === 'html')!;
+  const pyProb = INITIAL_PROBLEMS.find((p) => p.language === 'python')!;
+  const sqlProb = INITIAL_PROBLEMS.find((p) => p.language === 'sql')!;
+
+  const htmlDefault = getDefaultEditorCode(htmlProb);
+  assert.equal(htmlDefault.includes('<!DOCTYPE html>'), true);
+  assert.equal(htmlDefault.includes('<html lang="vi">'), true);
+  assert.equal(htmlDefault.includes('<head>'), true);
+  assert.equal(htmlDefault.includes('<body>'), true);
+  assert.equal(htmlDefault.includes('</html>'), true);
+  assert.equal(htmlDefault.includes('<title'), false);
+  assert.equal(htmlDefault.includes('<style'), false);
+  assert.equal(htmlDefault.includes('<!--'), false);
+  assert.equal(htmlDefault.includes('/*'), false);
+  assert.deepEqual(analyzeSyntax(htmlDefault, 'html'), []);
+
+  assert.equal(getDefaultEditorCode(pyProb), '');
+  assert.equal(getDefaultEditorCode(sqlProb), '');
+});
+
+

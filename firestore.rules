@@ -151,8 +151,8 @@ service cloud.firestore {
 
     // Root Collection: UserProgress
     match /user_progress/{userId} {
-      allow get: if isOwner(userId) && isValidId(userId);
-      allow list: if isOwner(userId) && existing().userId == request.auth.uid;
+      allow get: if isValidId(userId);
+      allow list: if true;
 
       allow create: if isOwner(userId) &&
         isValidId(userId) &&
@@ -237,6 +237,98 @@ service cloud.firestore {
 
         allow update, delete: if false;
       }
+    }
+
+    function isValidMeetRoom(data) {
+      return data.keys().hasAll([
+          'roomId',
+          'hostName',
+          'offerSdp',
+          'answerSdp',
+          'sharedCode',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'roomId',
+          'hostName',
+          'offerSdp',
+          'answerSdp',
+          'sharedCode',
+          'updatedAt'
+        ]) &&
+        isValidId(data.roomId) &&
+        data.hostName is string && data.hostName.size() >= 1 && data.hostName.size() <= 100 &&
+        data.offerSdp is string && data.offerSdp.size() >= 0 && data.offerSdp.size() <= 30000 &&
+        data.answerSdp is string && data.answerSdp.size() >= 0 && data.answerSdp.size() <= 30000 &&
+        data.sharedCode is string && data.sharedCode.size() >= 0 && data.sharedCode.size() <= 20000 &&
+        data.updatedAt is timestamp;
+    }
+
+    match /meet_rooms/{roomId} {
+      allow get: if isValidId(roomId);
+      allow list: if false;
+      allow create, update: if isValidId(roomId) &&
+        isValidMeetRoom(incoming()) &&
+        incoming().roomId == roomId &&
+        incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    function isValidLeaderboardEntry(data) {
+      return data.keys().hasAll([
+          'syncKey',
+          'displayName',
+          'schoolName',
+          'className',
+          'xp',
+          'streakDays',
+          'solvedCount',
+          'solvedIds',
+          'examCount',
+          'deviceLabel',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'syncKey',
+          'displayName',
+          'schoolName',
+          'className',
+          'xp',
+          'streakDays',
+          'solvedCount',
+          'solvedIds',
+          'examCount',
+          'deviceLabel',
+          'updatedAt'
+        ]) &&
+        isValidId(data.syncKey) &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        data.schoolName is string && data.schoolName.size() >= 0 && data.schoolName.size() <= 150 &&
+        data.className is string && data.className.size() >= 0 && data.className.size() <= 50 &&
+        data.xp is number && data.xp >= 0 && data.xp <= 10000000 &&
+        data.streakDays is number && data.streakDays >= 0 && data.streakDays <= 10000 &&
+        data.solvedCount is number && data.solvedCount >= 0 && data.solvedCount <= 50000 &&
+        data.solvedIds is list && data.solvedIds.size() <= 500 &&
+        (data.solvedIds.size() == 0 || (data.solvedIds[0] is string && data.solvedIds[0].size() >= 1 && data.solvedIds[0].size() <= 128)) &&
+        data.examCount is number && data.examCount >= 0 && data.examCount <= 10000 &&
+        data.deviceLabel is string && data.deviceLabel.size() >= 1 && data.deviceLabel.size() <= 100 &&
+        data.updatedAt is timestamp;
+    }
+
+    match /leaderboard/{syncKey} {
+      allow get: if isValidId(syncKey);
+      allow list: if true;
+      allow create: if isValidId(syncKey) &&
+        isValidLeaderboardEntry(incoming()) &&
+        incoming().syncKey == syncKey &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(syncKey) &&
+        isValidLeaderboardEntry(incoming()) &&
+        incoming().syncKey == existing().syncKey &&
+        incoming().updatedAt == request.time &&
+        incoming().xp >= existing().xp &&
+        incoming().solvedCount >= existing().solvedCount;
+      allow delete: if false;
     }
   }
 }

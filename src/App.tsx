@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
 import {
   BookOpen,
@@ -31,23 +31,38 @@ import {
   SubmissionItem,
   UserProgressState,
 } from './types/academic';
-import { executeAndGrade } from './utils/codeEngine';
+import {
+  autoUppercaseSql,
+  executeAndGrade,
+  getDefaultEditorCode,
+  sanitizeHtmlForPreview,
+} from './utils/codeEngine';
 import { ExamGradingResult, MOCK_EXAMS } from './utils/examCatalog';
 import { INITIAL_PROBLEMS } from './utils/problemCatalog';
 import {
+  getCanonicalSyncKey,
   loadLocalProgress,
   recordCloudExamAttempt,
   recordCloudSubmission,
+   sanitizeId,
   saveLocalProgress,
+  subscribeToCrossDeviceProgress,
   syncProgressWithCloud,
 } from './utils/progressSync';
 import { ClassicalIdeEditor } from './components/ClassicalIdeEditor';
 import { ExamArenaView } from './components/ExamArenaView';
+import { LeaderboardView } from './components/LeaderboardView';
 import { ProgressSyncView } from './components/ProgressSyncView';
 import { SqlSandboxRunner } from './components/SqlSandboxRunner';
-import { SyntaxHighlightedCode } from './components/SyntaxHighlightedCode';
+import { WebRtcMeetView } from './components/WebRtcMeetView';
 
-type ActiveSection = 'practice' | 'algorithms' | 'exams' | 'progress';
+type ActiveSection =
+  | 'practice'
+  | 'algorithms'
+  | 'exams'
+  | 'leaderboard'
+  | 'meet'
+  | 'progress';
 
 const DIFFICULTY_META: Record<Difficulty, { label: string; rank: string }> = {
   easy: { label: 'Dễ (Nhận biết)', rank: 'Cấp I' },
@@ -130,6 +145,12 @@ export default function App() {
               immediateState
             );
             setProgress(synced);
+            if (synced.savedCodeByProblem) {
+              setEditorCodeMap((prev) => ({
+                ...synced.savedCodeByProblem,
+                ...prev,
+              }));
+            }
             setSyncStatusMessage(
               `Đã đồng bộ tự động với tài khoản đám mây (${user.email || user.displayName}).`
             );
@@ -141,6 +162,22 @@ export default function App() {
           } finally {
             setIsSyncing(false);
           }
+        } else {
+          // Even when logged in via Direct Gmail Modal or existing profile, sync with Cloud on startup
+          const local = loadLocalProgress();
+          if (local.profileCompleted && (local.cloudEmail || local.displayName)) {
+            syncProgressWithCloud(local.userId, local)
+              .then((synced) => {
+                setProgress(synced);
+                if (synced.savedCodeByProblem) {
+                  setEditorCodeMap((prev) => ({
+                    ...synced.savedCodeByProblem,
+                    ...prev,
+                  }));
+                }
+              })
+              .catch(() => {});
+          }
         }
       });
       return () => unsubscribe();
@@ -150,14 +187,170 @@ export default function App() {
     }
   }, []);
 
+  // Compute canonical syncKey for real-time cross-device listener (PC <-> Phone)
+  const activeSyncKey = useMemo(
+    () =>
+      getCanonicalSyncKey(
+        progress,
+        firebaseUser?.uid || progress.userId,
+        firebaseUser?.email || progress.cloudEmail
+      ),
+    [
+      progress.cloudEmail,
+      progress.userId,
+      progress.displayName,
+      progress.schoolName,
+      progress.className,
+      firebaseUser?.uid,
+      firebaseUser?.email,
+    ]
+  );
+
+  // Real-time Firestore onSnapshot listener + automatic background/focus/pageshow sync so Phone & PC stay in sync automatically without logging out or clearing cache
+  useEffect(() => {
+    if (!progress.profileCompleted || !activeSyncKey) return undefined;
+
+    // Immediately sync on mount or when account identity changes
+    const initialLocal = loadLocalProgress();
+    const initialUid = firebaseUser?.uid || initialLocal.userId;
+    syncProgressWithCloud(initialUid, initialLocal)
+      .then((synced) => {
+        setProgress(synced);
+        if (synced.savedCodeByProblem) {
+          setEditorCodeMap((prev) => ({
+            ...synced.savedCodeByProblem,
+            ...prev,
+          }));
+        }
+      })
+      .catch(() => {});
+
+    const unsubscribeSnapshot = subscribeToCrossDeviceProgress(
+      activeSyncKey,
+      firebaseUser?.uid || null,
+      (remote) => {
+        setProgress((prev) => {
+          const mergedSolved = Array.from(
+            new Set([
+              ...prev.solvedIds.map(sanitizeId),
+              ...remote.solvedIds.map(sanitizeId),
+            ])
+          ).slice(0, 500);
+          const nextXp = Math.max(prev.xp, remote.xp);
+          const nextStreak = Math.max(prev.streakDays || 1, remote.streakDays || 1);
+          const nextExams = Math.max(prev.examCount, remote.examCount);
+          const nextName =
+            (remote.displayName && remote.displayName.trim()) || prev.displayName;
+          const nextSchool =
+            (remote.schoolName && remote.schoolName.trim()) || prev.schoolName;
+          const nextClass =
+            (remote.className && remote.className.trim()) || prev.className;
+
+          const hasNewSolved = mergedSolved.length !== prev.solvedIds.length;
+          const hasNewXp = nextXp !== prev.xp;
+          const hasNewExams = nextExams !== prev.examCount;
+          const hasProfileChange =
+            nextName !== prev.displayName ||
+            nextSchool !== prev.schoolName ||
+            nextClass !== prev.className;
+
+          if (!hasNewSolved && !hasNewXp && !hasNewExams && !hasProfileChange) {
+            return prev;
+          }
+
+          const updated: UserProgressState = {
+            ...prev,
+            displayName: nextName,
+            schoolName: nextSchool,
+            className: nextClass,
+            xp: nextXp,
+            streakDays: nextStreak,
+            solvedIds: mergedSolved,
+            solvedCount: mergedSolved.length,
+            examCount: nextExams,
+            lastSyncedIso: new Date().toISOString(),
+          };
+          saveLocalProgress(updated);
+          setSyncStatusMessage(
+            `Tự động đồng bộ đa thiết bị (${mergedSolved.length}/400 bài · ${nextXp} XP) lúc ${new Date().toLocaleTimeString('vi-VN')}.`
+          );
+          return updated;
+        });
+      }
+    );
+
+    const triggerAutoPullFromServer = () => {
+      if (document.visibilityState === 'visible') {
+        const latestLocal = loadLocalProgress();
+        const uidToUse = firebaseUser?.uid || latestLocal.userId;
+        syncProgressWithCloud(uidToUse, latestLocal)
+          .then((synced) => {
+            setProgress(synced);
+            if (synced.savedCodeByProblem) {
+              setEditorCodeMap((prev) => ({
+                ...synced.savedCodeByProblem,
+                ...prev,
+              }));
+            }
+          })
+          .catch(() => {});
+      }
+    };
+
+    const handleStorageEvent = (ev: StorageEvent) => {
+      if (ev.key === 'thpt_qt_tin_thpt_progress_v2') {
+        const reloaded = loadLocalProgress();
+        setProgress(reloaded);
+        setEditorCodeMap(reloaded.savedCodeByProblem || {});
+      }
+    };
+
+    // Automatic periodic server sync every 8 seconds while tab is visible (handles mobile background resume & cross-device switches seamlessly)
+    const autoSyncTimer = window.setInterval(triggerAutoPullFromServer, 8000);
+
+    window.addEventListener('focus', triggerAutoPullFromServer);
+    window.addEventListener('pageshow', triggerAutoPullFromServer);
+    window.addEventListener('online', triggerAutoPullFromServer);
+    document.addEventListener('visibilitychange', triggerAutoPullFromServer);
+    window.addEventListener('storage', handleStorageEvent);
+
+    return () => {
+      unsubscribeSnapshot();
+      window.clearInterval(autoSyncTimer);
+      window.removeEventListener('focus', triggerAutoPullFromServer);
+      window.removeEventListener('pageshow', triggerAutoPullFromServer);
+      window.removeEventListener('online', triggerAutoPullFromServer);
+      document.removeEventListener('visibilitychange', triggerAutoPullFromServer);
+      window.removeEventListener('storage', handleStorageEvent);
+    };
+  }, [progress.profileCompleted, activeSyncKey, firebaseUser?.uid]);
+
   const selectedProblem = useMemo(
     () =>
       problems.find((p) => p.id === selectedProblemId) || problems[0],
     [problems, selectedProblemId]
   );
 
-  // Editor starts empty ("") when no user code has been saved for this problem
-  const currentCode = editorCodeMap[selectedProblem.id] ?? '';
+  // Resolve current code:
+  // - For HTML problems: pre-populate the HTML5 boilerplate structure if not yet customized
+  // - For SQL problems: ensure SQL characters are automatically uppercased
+  // - For Python problems: start empty ("") unless saved
+  const currentCode = useMemo(() => {
+    const saved = editorCodeMap[selectedProblem.id];
+    if (selectedProblem.language === 'html') {
+      if (saved !== undefined && saved.trim() !== '') {
+        return saved;
+      }
+      return getDefaultEditorCode(selectedProblem);
+    }
+    if (selectedProblem.language === 'sql') {
+      return saved ? autoUppercaseSql(saved) : '';
+    }
+    return saved ?? '';
+  }, [editorCodeMap, selectedProblem]);
+
+  // Deferred code for live HTML iframe preview so typing never lags on mobile/tablet/desktop
+  const deferredPreviewCode = useDeferredValue(currentCode);
 
   const effectiveModeFilter: 'ALL' | PracticeMode =
     activeSection === 'algorithms' ? 'algorithm' : modeFilter;
@@ -220,14 +413,24 @@ export default function App() {
     }
   };
 
+  const saveDebounceRef = useRef<number | null>(null);
+  const latestProgressRef = useRef(progress);
+  latestProgressRef.current = progress;
+
   const handleChangeCode = (nextCode: string) => {
+    const normalizedCode =
+      selectedProblem.language === 'sql' ? autoUppercaseSql(nextCode) : nextCode;
     setEditorCodeMap((prev) => {
-      const updated = { ...prev, [selectedProblem.id]: nextCode };
-      const nextProgress: UserProgressState = {
-        ...progress,
-        savedCodeByProblem: updated,
-      };
-      saveLocalProgress(nextProgress);
+      const updated = { ...prev, [selectedProblem.id]: normalizedCode };
+      if (saveDebounceRef.current !== null) {
+        window.clearTimeout(saveDebounceRef.current);
+      }
+      saveDebounceRef.current = window.setTimeout(() => {
+        saveLocalProgress({
+          ...latestProgressRef.current,
+          savedCodeByProblem: updated,
+        });
+      }, 280);
       return updated;
     });
   };
@@ -274,16 +477,16 @@ export default function App() {
     setProgress(nextProgress);
     saveLocalProgress(nextProgress);
 
-    if (firebaseUser) {
-      try {
-        await recordCloudSubmission(
-          firebaseUser.uid,
-          newSubmission,
-          nextProgress
-        );
-      } catch (err) {
-        console.error(err);
-      }
+    try {
+      const uidToUse = firebaseUser ? firebaseUser.uid : nextProgress.userId;
+      const synced = await recordCloudSubmission(
+        uidToUse,
+        newSubmission,
+        nextProgress
+      );
+      setProgress(synced);
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -315,12 +518,12 @@ export default function App() {
     setProgress(nextProgress);
     saveLocalProgress(nextProgress);
 
-    if (firebaseUser) {
-      try {
-        await recordCloudExamAttempt(firebaseUser.uid, attempt, nextProgress);
-      } catch (err) {
-        console.error(err);
-      }
+    try {
+      const uidToUse = firebaseUser ? firebaseUser.uid : nextProgress.userId;
+      const synced = await recordCloudExamAttempt(uidToUse, attempt, nextProgress);
+      setProgress(synced);
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -433,17 +636,21 @@ export default function App() {
     saveLocalProgress(nextProgress);
     setShowGoogleAuthModal(false);
     setSetupError('');
-    setSyncStatusMessage(
-      `Đã kết nối và đồng bộ tài khoản Google (${cleanEmail}) lúc ${new Date().toLocaleTimeString('vi-VN')}.`
-    );
-
-    if (firebaseUser) {
-      try {
-        const synced = await syncProgressWithCloud(firebaseUser.uid, nextProgress);
-        setProgress(synced);
-      } catch (err) {
-        console.error(err);
-      }
+    setIsSyncing(true);
+    try {
+      const uidToUse = firebaseUser ? firebaseUser.uid : nextProgress.userId;
+      const synced = await syncProgressWithCloud(uidToUse, nextProgress);
+      setProgress(synced);
+      setSyncStatusMessage(
+        `Đã kết nối và đồng bộ đa thiết bị qua tài khoản Google (${cleanEmail}) lúc ${new Date().toLocaleTimeString('vi-VN')}.`
+      );
+    } catch (err) {
+      console.error(err);
+      setSyncStatusMessage(
+        `Đã kết nối tài khoản Google (${cleanEmail}) lúc ${new Date().toLocaleTimeString('vi-VN')}.`
+      );
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -468,19 +675,11 @@ export default function App() {
   const handleManualCloudSync = async () => {
     setIsSyncing(true);
     try {
-      if (firebaseUser) {
-        const synced = await syncProgressWithCloud(firebaseUser.uid, progress);
-        setProgress(synced);
-      } else {
-        const refreshed: UserProgressState = {
-          ...progress,
-          lastSyncedIso: new Date().toISOString(),
-        };
-        setProgress(refreshed);
-        saveLocalProgress(refreshed);
-      }
+      const uidToUse = firebaseUser ? firebaseUser.uid : progress.userId;
+      const synced = await syncProgressWithCloud(uidToUse, progress);
+      setProgress(synced);
       setSyncStatusMessage(
-        `Đồng bộ hoàn tất lúc ${new Date().toLocaleTimeString('vi-VN')}.`
+        `Đồng bộ đa thiết bị hoàn tất lúc ${new Date().toLocaleTimeString('vi-VN')} (${synced.solvedIds.length}/400 bài · ${synced.xp} XP).`
       );
     } catch (err) {
       setSyncStatusMessage(
@@ -508,12 +707,12 @@ export default function App() {
     };
     setProgress(nextProgress);
     saveLocalProgress(nextProgress);
-    if (firebaseUser) {
-      try {
-        await syncProgressWithCloud(firebaseUser.uid, nextProgress);
-      } catch (err) {
-        console.error(err);
-      }
+    try {
+      const uidToUse = firebaseUser ? firebaseUser.uid : nextProgress.userId;
+      const synced = await syncProgressWithCloud(uidToUse, nextProgress);
+      setProgress(synced);
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -784,9 +983,9 @@ export default function App() {
         </div>
       )}
 
-      {/* Responsive Top Navigation Bar — Monochrome Coder Style */}
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-6 px-3.5 sm:px-6 py-3 sm:py-4 border-b-2 border-black bg-white sticky top-0 z-30">
-        <div className="flex items-center justify-between gap-2 min-w-0">
+      {/* Responsive Top Navigation Bar — Single Row Monochrome Coder Style */}
+      <header className="flex flex-col md:flex-row md:items-center md:flex-nowrap justify-between gap-2 md:gap-4 px-3 sm:px-5 py-2.5 sm:py-3 border-b-2 border-black bg-white sticky top-0 z-30">
+        <div className="flex items-center justify-between gap-2 min-w-0 shrink-0">
           {/* Zone 1: Single text element wordmark */}
           <a
             href="#practice"
@@ -795,7 +994,7 @@ export default function App() {
               setActiveSection('practice');
               setModeFilter('ALL');
             }}
-            className="text-base sm:text-xl font-bold tracking-tight text-black whitespace-nowrap shrink-0"
+            className="text-base sm:text-lg lg:text-xl font-bold tracking-tight text-black whitespace-nowrap shrink-0"
           >
             THPT QT-Tin THPT
           </a>
@@ -804,7 +1003,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveSection('progress')}
-            className="md:hidden coder-btn px-2.5 py-1.5 text-xs font-bold text-white bg-black hover:bg-zinc-800 transition-colors max-w-[175px] truncate cursor-pointer"
+            className="md:hidden coder-btn px-2.5 py-1 text-xs font-bold text-white bg-black hover:bg-zinc-800 transition-colors max-w-[175px] truncate cursor-pointer"
           >
             {progress.displayName
               ? `${progress.displayName} · ${progress.xp} XP`
@@ -812,29 +1011,31 @@ export default function App() {
           </button>
         </div>
 
-        {/* Zone 2: 4 concise navigation links (2x2 grid on mobile, row on desktop) */}
+        {/* Zone 2: Single-line navigation links (never wraps onto multiple lines) */}
         <nav
           aria-label="Điều hướng chính"
-          className="grid grid-cols-2 sm:flex sm:items-center gap-1.5 sm:gap-6 text-[11px] sm:text-sm font-semibold text-zinc-600"
+          className="flex items-center flex-nowrap justify-between sm:justify-center gap-1.5 sm:gap-3 lg:gap-4 text-[11px] sm:text-xs lg:text-sm font-semibold text-zinc-600 overflow-x-auto min-w-0"
         >
           <a
             href="#practice"
+            data-testid="nav-practice"
             onClick={(e) => {
               e.preventDefault();
               setActiveSection('practice');
               if (modeFilter === 'algorithm') setModeFilter('ALL');
               setCatalogPage(1);
             }}
-            className={`px-1 py-1.5 sm:px-0 sm:py-1 text-center sm:text-left tracking-tighter sm:tracking-normal border sm:border-0 transition-colors whitespace-nowrap shrink-0 ${
+            className={`px-2 py-1 sm:px-0 sm:py-1 text-center tracking-tight sm:tracking-normal border sm:border-0 transition-colors whitespace-nowrap shrink-0 ${
               activeSection === 'practice'
                 ? 'bg-black text-white sm:bg-transparent sm:text-black font-bold border-black sm:border-b-2 sm:border-black'
                 : 'bg-zinc-100 sm:bg-transparent border-zinc-300 hover:text-black'
             }`}
           >
-            Luyện Tập Code (300)
+            Code
           </a>
           <a
             href="#algorithms"
+            data-testid="nav-algorithms"
             onClick={(e) => {
               e.preventDefault();
               setActiveSection('algorithms');
@@ -845,13 +1046,13 @@ export default function App() {
                 setExecutionReport(null);
               }
             }}
-            className={`px-1 py-1.5 sm:px-0 sm:py-1 text-center sm:text-left tracking-tighter sm:tracking-normal border sm:border-0 transition-colors whitespace-nowrap shrink-0 ${
+            className={`px-2 py-1 sm:px-0 sm:py-1 text-center tracking-tight sm:tracking-normal border sm:border-0 transition-colors whitespace-nowrap shrink-0 ${
               activeSection === 'algorithms'
                 ? 'bg-black text-white sm:bg-transparent sm:text-black font-bold border-black sm:border-b-2 sm:border-black'
                 : 'bg-zinc-100 sm:bg-transparent border-zinc-300 hover:text-black'
             }`}
           >
-            Luyện Thuật Toán (100)
+            Thuật Toán
           </a>
           <a
             href="#exams"
@@ -859,7 +1060,7 @@ export default function App() {
               e.preventDefault();
               setActiveSection('exams');
             }}
-            className={`px-1 py-1.5 sm:px-0 sm:py-1 text-center sm:text-left tracking-tighter sm:tracking-normal border sm:border-0 transition-colors whitespace-nowrap shrink-0 ${
+            className={`px-2 py-1 sm:px-0 sm:py-1 text-center tracking-tight sm:tracking-normal border sm:border-0 transition-colors whitespace-nowrap shrink-0 ${
               activeSection === 'exams'
                 ? 'bg-black text-white sm:bg-transparent sm:text-black font-bold border-black sm:border-b-2 sm:border-black'
                 : 'bg-zinc-100 sm:bg-transparent border-zinc-300 hover:text-black'
@@ -868,12 +1069,42 @@ export default function App() {
             Đề Thi Thử (100)
           </a>
           <a
+            href="#leaderboard"
+            data-testid="nav-leaderboard"
+            onClick={(e) => {
+              e.preventDefault();
+              setActiveSection('leaderboard');
+            }}
+            className={`px-2 py-1 sm:px-0 sm:py-1 text-center tracking-tight sm:tracking-normal border sm:border-0 transition-colors whitespace-nowrap shrink-0 ${
+              activeSection === 'leaderboard'
+                ? 'bg-black text-white sm:bg-transparent sm:text-black font-bold border-black sm:border-b-2 sm:border-black'
+                : 'bg-zinc-100 sm:bg-transparent border-zinc-300 hover:text-black'
+            }`}
+          >
+            Bảng Xếp Hạng
+          </a>
+          <a
+            href="#meet"
+            data-testid="nav-webrtc-meet"
+            onClick={(e) => {
+              e.preventDefault();
+              setActiveSection('meet');
+            }}
+            className={`px-2 py-1 sm:px-0 sm:py-1 text-center tracking-tight sm:tracking-normal border sm:border-0 transition-colors whitespace-nowrap shrink-0 ${
+              activeSection === 'meet'
+                ? 'bg-black text-white sm:bg-transparent sm:text-black font-bold border-black sm:border-b-2 sm:border-black'
+                : 'bg-zinc-100 sm:bg-transparent border-zinc-300 hover:text-black'
+            }`}
+          >
+            Họp Meet
+          </a>
+          <a
             href="#progress"
             onClick={(e) => {
               e.preventDefault();
               setActiveSection('progress');
             }}
-            className={`px-1 py-1.5 sm:px-0 sm:py-1 text-center sm:text-left tracking-tighter sm:tracking-normal border sm:border-0 transition-colors whitespace-nowrap shrink-0 ${
+            className={`px-2 py-1 sm:px-0 sm:py-1 text-center tracking-tight sm:tracking-normal border sm:border-0 transition-colors whitespace-nowrap shrink-0 ${
               activeSection === 'progress'
                 ? 'bg-black text-white sm:bg-transparent sm:text-black font-bold border-black sm:border-b-2 sm:border-black'
                 : 'bg-zinc-100 sm:bg-transparent border-zinc-300 hover:text-black'
@@ -888,7 +1119,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveSection('progress')}
-            className="coder-btn px-4 py-2 text-sm font-bold text-white bg-black hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="coder-btn px-3.5 py-1.5 text-xs lg:text-sm font-bold text-white bg-black hover:bg-zinc-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             {progress.displayName
               ? `${progress.displayName} · ${progress.xp} XP`
@@ -1085,7 +1316,7 @@ export default function App() {
                       }`}
                     >
                       <div
-                        className={`flex items-center justify-between gap-2 text-xs ${
+                        className={`flex items-center justify-between gap-2 text-xs sm:text-sm ${
                           isSelected ? 'text-zinc-300' : 'text-zinc-600'
                         }`}
                       >
@@ -1102,21 +1333,21 @@ export default function App() {
                               isSelected ? 'text-emerald-300' : 'text-black'
                             }`}
                           >
-                            <CheckCircle2 className="w-3.5 h-3.5" /> ✓ Đạt
+                            <CheckCircle2 className="w-4 h-4" /> ✓ Đạt
                           </span>
                         ) : (
                           <span className="tabular-nums">+{prob.xpReward} XP</span>
                         )}
                       </div>
                       <div
-                        className={`text-sm font-bold mt-1 leading-snug ${
+                        className={`text-sm sm:text-base font-bold mt-1.5 leading-snug ${
                           isSelected ? 'text-white' : 'text-black'
                         }`}
                       >
                         {prob.title}
                       </div>
                       <div
-                        className={`text-xs mt-1 ${
+                        className={`text-xs sm:text-sm mt-1 ${
                           isSelected ? 'text-zinc-300' : 'text-zinc-500'
                         }`}
                       >
@@ -1178,32 +1409,32 @@ export default function App() {
                     <span>{selectedProblem.gradeTag}</span>
                   </div>
 
-                  <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-black tabular-nums">
+                  <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-black tabular-nums">
                     <span>+{selectedProblem.xpReward} XP</span>
                   </div>
                 </div>
 
-                <h1 className="text-xl sm:text-2xl md:text-[26px] font-bold text-black leading-tight">
+                <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-black leading-tight">
                   {selectedProblem.title}
                 </h1>
 
-                <p className="text-sm sm:text-base text-zinc-900 leading-relaxed">
+                <p className="text-base sm:text-lg text-zinc-900 leading-relaxed">
                   {selectedProblem.description}
                 </p>
 
                 {/* Technical I/O & Constraints Box */}
-                <div className="p-4 bg-zinc-100 border border-zinc-900 space-y-2">
-                  <div className="text-sm font-bold text-black">
+                <div className="p-4 sm:p-5 bg-zinc-100 border border-zinc-900 space-y-2.5">
+                  <div className="text-sm sm:text-base font-bold text-black">
                     Đặc tả Kỹ thuật (Input / Output) & Ràng buộc:
                   </div>
-                  <p className="text-sm text-zinc-800 leading-relaxed">
+                  <p className="text-sm sm:text-base text-zinc-800 leading-relaxed">
                     {selectedProblem.taskSpecification}
                   </p>
                   <div className="flex flex-wrap items-center gap-2 pt-1">
                     {selectedProblem.constraints.map((c, idx) => (
                       <span
                         key={idx}
-                        className="px-2.5 py-1 bg-white border border-zinc-500 text-xs font-mono-tabular text-zinc-800"
+                        className="px-2.5 py-1 bg-white border border-zinc-500 text-xs sm:text-sm font-mono-tabular text-zinc-800"
                       >
                         {c}
                       </span>
@@ -1214,13 +1445,13 @@ export default function App() {
                 {/* Language-Specific Reference Context: Python Sample I/O OR SQL Relational Schema */}
                 {selectedProblem.language === 'python' &&
                   selectedProblem.pythonTests && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-1">
                       {selectedProblem.pythonTests
                         .filter((tc) => !tc.isHidden)
                         .map((tc, i) => (
                           <div
                             key={tc.id}
-                            className="p-3.5 bg-zinc-100 border border-zinc-900 text-xs sm:text-sm font-mono-tabular space-y-1.5"
+                            className="p-3.5 sm:p-4 bg-zinc-100 border border-zinc-900 text-sm sm:text-base font-mono-tabular space-y-1.5"
                           >
                             <div className="font-bold text-zinc-800">
                               Ví dụ mẫu #{i + 1}:
@@ -1250,13 +1481,15 @@ export default function App() {
                 )}
               </article>
 
-              {/* Coder IDE Editor (Starts Empty + Color Syntax Highlighting + Smooth Sliding Caret + Live Output Bar) */}
+              {/* Coder IDE Editor (Starts Empty for Python/SQL, Pre-populated HTML5 for HTML + Auto Uppercase SQL + Live Output Bar) */}
               <ClassicalIdeEditor
                 problem={selectedProblem}
                 code={currentCode}
                 onChangeCode={handleChangeCode}
                 onRunAndGrade={handleRunAndGrade}
-                onResetStarter={() => handleChangeCode('')}
+                onResetStarter={() =>
+                  handleChangeCode(getDefaultEditorCode(selectedProblem))
+                }
               />
 
               {/* Isolated Sandboxed Live HTML5 & CSS3 Preview (Prevents h1 / style leaking to parent page) */}
@@ -1274,8 +1507,9 @@ export default function App() {
                   <iframe
                     data-testid="html-preview-iframe"
                     title="HTML5 & CSS3 Sandboxed Preview"
-                    sandbox="allow-same-origin"
-                    srcDoc={`<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:sans-serif;margin:12px;color:#09090B;background:#fff;}</style></head><body>${currentCode}</body></html>`}
+                    sandbox=""
+                    referrerPolicy="no-referrer"
+                    srcDoc={`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; font-src data:;"><style>body{font-family:sans-serif;margin:12px;color:#09090B;background:#fff;}</style></head><body>${sanitizeHtmlForPreview(deferredPreviewCode)}</body></html>`}
                     className="w-full min-h-[180px] bg-white border border-zinc-400"
                   />
                 </div>
@@ -1419,7 +1653,32 @@ export default function App() {
           />
         )}
 
-        {/* SECTION 4: PROGRESS & CLOUD / CROSS-DEVICE SYNC */}
+        {/* SECTION 4: REAL-TIME LEADERBOARD (BẢNG XẾP HẠNG TOÀN QUỐC) */}
+        {activeSection === 'leaderboard' && (
+          <LeaderboardView
+            progress={progress}
+            allProblems={problems}
+            firebaseUser={firebaseUser}
+          />
+        )}
+
+        {/* SECTION 5: WEBRTC STUDY MEET (VIDEO / AUDIO / SCREEN SHARE / SHARED CODE) */}
+        {activeSection === 'meet' && (
+          <WebRtcMeetView
+            studentName={progress.displayName}
+            schoolName={progress.schoolName}
+            className={progress.className || ''}
+            firebaseUser={firebaseUser}
+            selectedProblem={selectedProblem}
+            currentEditorCode={currentCode}
+            onApplySharedCodeToEditor={(codeFromMeet) => {
+              handleChangeCode(codeFromMeet);
+              setActiveSection('practice');
+            }}
+          />
+        )}
+
+        {/* SECTION 6: PROGRESS & CLOUD / CROSS-DEVICE SYNC */}
         {activeSection === 'progress' && (
           <ProgressSyncView
             progress={progress}

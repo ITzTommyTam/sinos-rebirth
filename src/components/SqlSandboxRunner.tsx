@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
   Database,
@@ -20,6 +20,8 @@ export const SqlSandboxRunner: React.FC<SqlSandboxRunnerProps> = ({
   problem,
   currentQuery,
 }) => {
+  const deferredQuery = useDeferredValue(currentQuery);
+
   const defaultTables = useMemo(
     () =>
       (problem.sqlTables || []).map((t) => ({
@@ -52,10 +54,10 @@ export const SqlSandboxRunner: React.FC<SqlSandboxRunnerProps> = ({
 
   const liveSqlResult = useMemo(() => {
     const t0 = performance.now();
-    const res = runSqlQuery(currentQuery, customTables);
+    const res = runSqlQuery(deferredQuery, customTables);
     const elapsed = Math.max(1, Math.round(performance.now() - t0));
     return { ...res, elapsed };
-  }, [currentQuery, customTables, lastRunAt]);
+  }, [deferredQuery, customTables, lastRunAt]);
 
   const handleAddRowToInputTable = (e: React.FormEvent) => {
     e.preventDefault();
@@ -173,14 +175,14 @@ export const SqlSandboxRunner: React.FC<SqlSandboxRunnerProps> = ({
           </div>
 
           {/* Active Input Table Data */}
-          <div className="overflow-x-auto bg-white border border-zinc-900 p-2.5 max-h-[210px] overflow-y-auto">
-            <table className="w-full border-collapse text-xs font-mono-tabular">
+          <div className="overflow-x-auto bg-white border border-zinc-900 p-2.5 max-h-[220px] overflow-y-auto">
+            <table className="w-full border-collapse text-xs sm:text-sm font-mono-tabular">
               <thead>
                 <tr className="border-b border-zinc-900 text-left text-zinc-600">
                   {activeTable.columns.map((c) => (
-                    <th key={c.name} className="py-1 pr-2">
+                    <th key={c.name} className="py-1.5 pr-2.5">
                       <div>{c.name}</div>
-                      <div className="text-[10px] font-normal text-zinc-400">
+                      <div className="text-xs font-normal text-zinc-400">
                         {c.type}
                       </div>
                     </th>
@@ -292,7 +294,7 @@ export const SqlSandboxRunner: React.FC<SqlSandboxRunnerProps> = ({
                 </div>
               ) : (
                 <div className="overflow-x-auto bg-zinc-950 text-white border border-zinc-900 p-3 min-h-[180px] max-h-[240px] overflow-y-auto">
-                  <table className="w-full border-collapse text-[11px] font-mono-tabular">
+                  <table className="w-full border-collapse text-xs sm:text-sm font-mono-tabular">
                     <thead>
                       <tr className="border-b border-zinc-700 text-left text-sky-400">
                         {liveSqlResult.columns.map((col) => (
@@ -321,7 +323,7 @@ export const SqlSandboxRunner: React.FC<SqlSandboxRunnerProps> = ({
               )
             ) : (
               <div className="overflow-x-auto bg-zinc-100 text-black border border-zinc-900 p-3 min-h-[180px] max-h-[240px] overflow-y-auto">
-                <table className="w-full border-collapse text-[11px] font-mono-tabular">
+                <table className="w-full border-collapse text-xs sm:text-sm font-mono-tabular">
                   <thead>
                     <tr className="border-b border-zinc-900 text-left text-zinc-700">
                       {expectedColumns.map((col) => (

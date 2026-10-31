@@ -150,19 +150,14 @@ export const ProgressSyncView: React.FC<ProgressSyncViewProps> = ({
               <div className="px-3 py-2 bg-white border border-zinc-900 text-xs text-black font-bold flex items-center gap-1.5 min-w-0">
                 <ShieldCheck className="w-4 h-4 shrink-0" />
                 <span className="truncate">
-                  Đã kết nối Google ({firebaseUser?.email || progress.cloudEmail || firebaseUser?.displayName})
+                  Tự động đồng bộ Google ({firebaseUser?.email || progress.cloudEmail || firebaseUser?.displayName})
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  disabled={isSyncing}
-                  onClick={onManualCloudSync}
-                  className="coder-btn flex-1 sm:flex-initial justify-center px-3.5 py-2 text-xs font-bold text-white bg-black hover:bg-zinc-800 transition-colors flex items-center gap-1.5 cursor-pointer"
-                >
+                <span className="px-3 py-2 text-xs font-bold text-white bg-black flex items-center gap-1.5">
                   <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>Đồng bộ Cloud ngay</span>
-                </button>
+                  <span>Tự động đồng bộ trực tiếp</span>
+                </span>
                 <button
                   type="button"
                   onClick={onSignOut}

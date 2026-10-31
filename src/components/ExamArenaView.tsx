@@ -208,7 +208,7 @@ export const ExamArenaView: React.FC<ExamArenaViewProps> = ({
                   )}
                 </div>
 
-                <p className="text-sm text-black font-medium leading-relaxed">
+                <p className="text-base sm:text-lg text-black font-medium leading-relaxed">
                   {q.prompt}
                 </p>
 
@@ -234,7 +234,7 @@ export const ExamArenaView: React.FC<ExamArenaViewProps> = ({
                           onClick={() =>
                             setMcqAnswers((prev) => ({ ...prev, [q.id]: opt.id }))
                           }
-                          className={`p-3 text-left text-xs border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
+                          className={`p-3.5 text-left text-sm sm:text-base border transition-colors flex items-center justify-between gap-2 cursor-pointer ${
                             isCorrectOption
                               ? 'bg-black border-black text-white font-bold'
                               : isSelected
@@ -249,7 +249,7 @@ export const ExamArenaView: React.FC<ExamArenaViewProps> = ({
                             {opt.text}
                           </span>
                           {isCorrectOption && (
-                            <span className="text-xs font-bold">✓ Đáp án đúng</span>
+                            <span className="text-xs sm:text-sm font-bold">✓ Đáp án đúng</span>
                           )}
                         </button>
                       );
@@ -267,13 +267,13 @@ export const ExamArenaView: React.FC<ExamArenaViewProps> = ({
                           key={st.id}
                           className="p-3 bg-zinc-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                         >
-                          <div className="text-xs text-black flex-1">
+                          <div className="text-sm sm:text-base text-black flex-1">
                             <strong className="font-mono-tabular mr-1.5">
                               {st.id})
                             </strong>
                             {st.text}
                             {gradingResult && (
-                              <span className="ml-2 text-xs font-bold underline">
+                              <span className="ml-2 text-xs sm:text-sm font-bold underline">
                                 [Đáp án chuẩn: {st.isTrue ? 'ĐÚNG' : 'SAI'}]
                               </span>
                             )}
@@ -490,11 +490,11 @@ export const ExamArenaView: React.FC<ExamArenaViewProps> = ({
                 <span className="tabular-nums">{exam.durationMinutes} phút</span>
               </div>
 
-              <h3 className="text-base font-bold text-black">
+              <h3 className="text-base sm:text-lg font-bold text-black">
                 {exam.title}
               </h3>
 
-              <p className="text-xs text-zinc-700 leading-relaxed">
+              <p className="text-xs sm:text-sm text-zinc-700 leading-relaxed">
                 {exam.description}
               </p>
             </div>

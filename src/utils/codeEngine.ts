@@ -14,6 +14,112 @@ if (typeof window !== 'undefined') {
   window.print = () => {};
 }
 
+/**
+ * Sanitizes user-authored HTML5/CSS3 code before rendering inside the sandboxed preview iframe.
+ * Strips executable <script>, nested <iframe>/<object>/<embed>, inline on* event handlers, and javascript: URIs
+ * while preserving all valid high-school HTML5 tags (table, form, input, style, ul, ol, h1..h6, p, a, img, etc.).
+ */
+export function sanitizeHtmlForPreview(rawHtml: string): string {
+  if (!rawHtml) return '';
+  return rawHtml
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<\/?(?:script|iframe|frame|frameset|object|embed|applet|base|meta)\b[^>]*>/gi, '')
+    .replace(/\son[a-z0-9_]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/(?:href|src|action|formaction)\s*=\s*(?:"\s*(?:javascript|vbscript|data\s*:\s*text\/html)[^"]*"|'\s*(?:javascript|vbscript|data\s*:\s*text\/html)[^']*')/gi, 'href="#"');
+}
+
+const SQL_KEYWORDS_AND_FUNCTIONS = new Set([
+  // SQL Functions (Aggregate, Scalar, String, Date, Math, Null-handling)
+  'COUNT', 'SUM', 'AVG', 'MAX', 'MIN', 'ROUND', 'ABS', 'CEIL', 'CEILING', 'FLOOR',
+  'MOD', 'POWER', 'SQRT', 'UPPER', 'LOWER', 'LENGTH', 'CHAR_LENGTH', 'SUBSTR',
+  'SUBSTRING', 'TRIM', 'LTRIM', 'RTRIM', 'REPLACE', 'CONCAT', 'COALESCE', 'IFNULL',
+  'NULLIF', 'CAST', 'DATE', 'TIME', 'DATETIME', 'YEAR', 'MONTH', 'DAY', 'NOW',
+  'STRFTIME', 'JULIANDAY', 'TOTAL', 'GROUP_CONCAT', 'IIF', 'TYPEOF', 'RANDOM',
+  // SQL Clauses, Commands & Operators
+  'SELECT', 'FROM', 'WHERE', 'INNER', 'LEFT', 'RIGHT', 'FULL', 'OUTER', 'CROSS',
+  'JOIN', 'ON', 'USING', 'GROUP', 'BY', 'HAVING', 'ORDER', 'ASC', 'DESC', 'LIMIT',
+  'OFFSET', 'DISTINCT', 'ALL', 'AS', 'AND', 'OR', 'NOT', 'IN', 'BETWEEN', 'LIKE',
+  'GLOB', 'IS', 'NULL', 'TRUE', 'FALSE', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+  'UNION', 'INTERSECT', 'EXCEPT', 'EXISTS', 'INSERT', 'INTO', 'VALUES', 'UPDATE',
+  'SET', 'DELETE', 'CREATE', 'TABLE', 'TEMP', 'TEMPORARY', 'IF', 'ALTER', 'ADD',
+  'COLUMN', 'RENAME', 'TO', 'DROP', 'PRIMARY', 'KEY', 'FOREIGN', 'REFERENCES',
+  'UNIQUE', 'CHECK', 'DEFAULT', 'INDEX', 'VIEW', 'WITH', 'RECURSIVE', 'OVER',
+  'PARTITION', 'ROW_NUMBER', 'RANK', 'DENSE_RANK',
+]);
+
+/**
+ * Automatically uppercases SQL function names and SQL keywords outside of string literals ('...' or "..."),
+ * while keeping table names, column names, and string literals in the student's original casing.
+ * Preserves exact string length, line breaks, and cursor offsets (1-to-1 character mapping).
+ */
+export function autoUppercaseSql(sql: string): string {
+  if (!sql) return '';
+  let result = '';
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let i = 0;
+
+  while (i < sql.length) {
+    const ch = sql[i];
+    if (ch === "'" && !inDoubleQuote) {
+      inSingleQuote = !inSingleQuote;
+      result += ch;
+      i++;
+    } else if (ch === '"' && !inSingleQuote) {
+      inDoubleQuote = !inDoubleQuote;
+      result += ch;
+      i++;
+    } else if (!inSingleQuote && !inDoubleQuote && /[a-zA-Z_]/.test(ch)) {
+      let end = i + 1;
+      while (end < sql.length && /[a-zA-Z0-9_]/.test(sql[end])) {
+        end++;
+      }
+      const token = sql.slice(i, end);
+      const upperToken = token.toUpperCase();
+
+      if (SQL_KEYWORDS_AND_FUNCTIONS.has(upperToken)) {
+        result += upperToken;
+      } else {
+        // If user typed a keyword/function (which got auto-uppercased) and continued typing
+        // a longer identifier or snake_case column name (e.g. MIN -> MIN_diem or IN -> INner),
+        // revert the auto-uppercased prefix back to lowercase seamlessly.
+        const prefixMatch = token.match(/^([A-Z]+)([a-z_][a-zA-Z0-9_]*)$/);
+        if (prefixMatch && SQL_KEYWORDS_AND_FUNCTIONS.has(prefixMatch[1])) {
+          result += prefixMatch[1].toLowerCase() + prefixMatch[2];
+        } else {
+          result += token;
+        }
+      }
+      i = end;
+    } else {
+      result += ch;
+      i++;
+    }
+  }
+  return result;
+}
+
+/**
+ * Returns the default initial code for a problem:
+ * - For HTML problems: pre-populates only the bare HTML skeleton (no <title>, no <style>, no comments).
+ * - For Python & SQL problems: starts empty ('').
+ */
+export function getDefaultEditorCode(problem: Problem): string {
+  if (problem.language === 'html') {
+    return `<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+</head>
+<body>
+  
+</body>
+</html>`;
+  }
+  return '';
+}
+
+
 const PYTHON_SUGGESTIONS: AutocompleteSuggestion[] = [
   { label: 'def', insertText: 'def ', kind: 'keyword', detail: 'Từ khóa khai báo hàm' },
   { label: 'for', insertText: 'for ', kind: 'keyword', detail: 'Từ khóa vòng lặp for' },
@@ -436,8 +542,24 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
   let inputIndex = 0;
   const outputChunks: string[] = [];
 
-  // Transpile Python subset to safe JS function body with loop guard
+  // Transpile Python subset to safe JS function body with loop guard and strict sandbox check
   try {
+    // Strip string literals & comments first to inspect code identifiers for sandbox escape attempts
+    const codeWithoutStringsAndComments = code
+      .replace(/#.*$/gm, '')
+      .replace(/"""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '""');
+
+    const forbiddenSandboxPattern =
+      /\b(?:window|document|localStorage|sessionStorage|indexedDB|caches|cookieStore|fetch|XMLHttpRequest|WebSocket|Worker|SharedWorker|ServiceWorker|Function|eval|globalThis|self|top|parent|frames|navigator|location|history|process|__proto__|prototype|constructor|importScripts)\b/;
+
+    if (forbiddenSandboxPattern.test(codeWithoutStringsAndComments)) {
+      return {
+        stdout: '',
+        error:
+          'SecurityError: Mã nguồn chứa từ khóa truy cập trình duyệt/hệ thống bị chặn bởi tường lửa bảo mật Sandbox.',
+      };
+    }
+
     const rawPyLines = code.replace(/\r\n/g, '\n').split('\n');
 
     // Pre-process lines: strip comments, split ';' statements outside quotes, and expand single-line blocks
@@ -529,6 +651,16 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
         const [, itemExpr, iterVar, iterSource] = listComp;
         return `Array.from(${transformExpr(iterSource)}).map((${iterVar}) => (${transformExpr(itemExpr)}))`;
       }
+      e = e.replace(
+        /\[\s*([^\[\]]+?)\s+for\s+([a-zA-Z_]\w*)\s+in\s+([^\[\]]+?)\s+if\s+([^\[\]]+?)\s*\]/g,
+        (_, itemExpr, iterVar, iterSource, condExpr) =>
+          `Array.from(${transformExpr(iterSource)}).filter((${iterVar}) => (${transformExpr(condExpr)})).map((${iterVar}) => (${transformExpr(itemExpr)}))`
+      );
+      e = e.replace(
+        /\[\s*([^\[\]]+?)\s+for\s+([a-zA-Z_]\w*)\s+in\s+([^\[\]]+?)\s*\]/g,
+        (_, itemExpr, iterVar, iterSource) =>
+          `Array.from(${transformExpr(iterSource)}).map((${iterVar}) => (${transformExpr(itemExpr)}))`
+      );
 
       // Handle generator inside sum/max/min: sum(expr for var in iterable)
       const genMatch = e.match(/^(sum|max|min)\(\s*(.+?)\s+for\s+([a-zA-Z_]\w*)\s+in\s+(.+?)\s*\)$/);
@@ -546,11 +678,24 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
         }
       }
 
-      // Handle string/list reverse slice [::-1]
+      // Handle string/list reverse slice [::-1] and standard slices [:b], [a:b], [a:]
       e = e.replace(/([a-zA-Z_]\w*|\([^)]+\))\[::-1\]/g, '__reverse($1)');
+      e = e.replace(/([a-zA-Z_]\w*)\[\s*:\s*([^\]:]+)\]/g, '$1.slice(0, $2)');
+      e = e.replace(/([a-zA-Z_]\w*)\[\s*([^\]:]+)\s*:\s*([^\]:]+)\]/g, '$1.slice($2, $3)');
+      e = e.replace(/([a-zA-Z_]\w*)\[\s*([^\]:]+)\s*:\s*\]/g, '$1.slice($2)');
 
-      // Replace integer division //
-      e = e.replace(/(\b[\w.)\]]+\s*)\/\/(\s*[\w.(\[]+)/g, 'Math.floor($1 / $2)');
+      // Replace integer division // safely including function calls and parenthesized expressions
+      while (e.includes('//')) {
+        const nextE = e.replace(
+          /([a-zA-Z0-9_.]+\([^()]*\)|\([^()]*\)|[a-zA-Z0-9_.]+(?:\[[^\]]+\])*)\s*\/\/\s*([a-zA-Z0-9_.]+\([^()]*\)|\([^()]*\)|-?[a-zA-Z0-9_.]+(?:\[[^\]]+\])*)/,
+          'Math.floor(($1) / ($2))'
+        );
+        if (nextE === e) {
+          e = e.replace(/\/\//g, '/');
+          break;
+        }
+        e = nextE;
+      }
       // Replace power **
       e = e.replace(/\*\*/g, '**');
 
@@ -585,6 +730,8 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
         .replace(/\bint\s*\(/g, '__int(')
         .replace(/\bfloat\s*\(/g, '__float(')
         .replace(/\bstr\s*\(/g, '__str(')
+        .replace(/\bord\s*\(/g, '__ord(')
+        .replace(/\bchr\s*\(/g, '__chr(')
         .replace(/\babs\s*\(/g, 'Math.abs(')
         .replace(/\bround\s*\(/g, '__round(')
         .replace(/\blist\s*\(/g, '__list(')
@@ -733,10 +880,14 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
       }
 
       // Augmented assignment: x += ...
-      const augAssign = trimmed.match(/^([a-zA-Z_]\w*(?:\[[^\]]+\])?)\s*(\+=|-=|\*=|\/=|%=)\s*(.+)$/);
+      const augAssign = trimmed.match(/^([a-zA-Z_]\w*(?:\[[^\]]+\])?)\s*(\+=|-=|\*=|\/\/=|\/=|%=)\s*(.+)$/);
       if (augAssign) {
         const [, lhs, op, rhs] = augAssign;
-        jsLines.push(`${transformExpr(lhs)} ${op} ${transformExpr(rhs)};`);
+        if (op === '//=') {
+          jsLines.push(`${transformExpr(lhs)} = Math.floor((${transformExpr(lhs)}) / (${transformExpr(rhs)}));`);
+        } else {
+          jsLines.push(`${transformExpr(lhs)} ${op} ${transformExpr(rhs)};`);
+        }
         continue;
       }
 
@@ -795,7 +946,23 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
       },
       __print: __printFn,
       print: __printFn,
-      window: {},
+      window: undefined,
+      document: undefined,
+      localStorage: undefined,
+      sessionStorage: undefined,
+      indexedDB: undefined,
+      fetch: undefined,
+      XMLHttpRequest: undefined,
+      WebSocket: undefined,
+      Worker: undefined,
+      globalThis: undefined,
+      self: undefined,
+      top: undefined,
+      parent: undefined,
+      frames: undefined,
+      navigator: undefined,
+      location: undefined,
+      history: undefined,
       alert: __printFn,
       confirm: () => false,
       prompt: () => (inputIndex < inputLines.length ? inputLines[inputIndex++] : ''),
@@ -837,6 +1004,8 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
         if (typeof x === 'boolean') return x ? 'True' : 'False';
         return String(x);
       },
+      __ord: (x: unknown) => String(x).charCodeAt(0),
+      __chr: (x: unknown) => String.fromCharCode(Number(x)),
       __round: (num: number, digits = 0) => {
         const factor = Math.pow(10, digits);
         return Math.round(num * factor) / factor;

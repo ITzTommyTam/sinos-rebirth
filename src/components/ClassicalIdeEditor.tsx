@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { OnMount } from '@monaco-editor/react';
 import {
   AlertTriangle,
@@ -16,7 +16,9 @@ import {
 } from '../types/academic';
 import {
   analyzeSyntax,
+  autoUppercaseSql,
   getAutocompleteSuggestions,
+  getDefaultEditorCode,
   getLiveCommandOutput,
 } from '../utils/codeEngine';
 
@@ -56,18 +58,38 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
   runCallbackRef.current = onRunAndGrade;
 
   const [cursorOffset, setCursorOffset] = useState<number>(code.length);
+  const [isCompactViewport, setIsCompactViewport] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  );
+
+  // Track device viewport width passively for smooth responsive Monaco Editor layout
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handleResize = () => {
+      setIsCompactViewport(window.innerWidth < 768);
+    };
+    window.addEventListener('resize', handleResize, { passive: true });
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Defer heavy syntax analysis & live code execution so typing stays 60fps across all devices
+  const deferredCode = useDeferredValue(code);
+  const deferredCursorOffset = useDeferredValue(cursorOffset);
 
   const diagnostics: SyntaxDiagnostic[] = useMemo(
-    () => analyzeSyntax(code, problem.language),
-    [code, problem.language]
+    () => analyzeSyntax(deferredCode, problem.language),
+    [deferredCode, problem.language]
   );
 
   const liveCommandInfo = useMemo(
-    () => getLiveCommandOutput(problem, code, cursorOffset),
-    [problem, code, cursorOffset]
+    () => getLiveCommandOutput(problem, deferredCode, deferredCursorOffset),
+    [problem, deferredCode, deferredCursorOffset]
   );
 
-  const lines = useMemo(() => (code ? code.split('\n') : ['']), [code]);
+  const lines = useMemo(
+    () => (deferredCode ? deferredCode.split('\n') : ['']),
+    [deferredCode]
+  );
 
   // Sync syntax diagnostics into Visual Studio Code (Monaco) squiggly underlines
   useEffect(() => {
@@ -164,45 +186,53 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
     <div className="flex flex-col border-2 border-zinc-900 bg-zinc-950 text-white rounded-none overflow-hidden min-w-0">
       {/* Editor Top Utility Strip — Original UI Shell */}
       <div className="flex flex-wrap items-center justify-between gap-2.5 px-3 sm:px-4 py-2.5 sm:py-3 bg-black border-b border-zinc-800">
-        <div className="flex items-center gap-2 text-sm sm:text-base text-zinc-300 shrink-0">
-          <Code2 className="w-4 h-4 text-sky-400 shrink-0" />
+        <div className="flex flex-wrap items-center gap-2 text-base sm:text-lg text-zinc-300 min-w-0">
+          <Code2 className="w-5 h-5 text-sky-400 shrink-0" />
           <span
             data-testid="editor-language-label"
             className="font-bold text-white tracking-tight"
           >
             {LANGUAGE_LABELS[problem.language]}
           </span>
+          {problem.language === 'sql' && (
+            <span className="text-xs font-mono text-emerald-400">
+              · Tự động IN HOA tên hàm SQL
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-2 w-full sm:w-auto">
           <button
             type="button"
             onClick={() => {
+              const resetVal = getDefaultEditorCode(problem);
               onResetStarter();
-              setCursorOffset(0);
+              setCursorOffset(resetVal.length);
               if (monacoEditorRef.current) {
-                monacoEditorRef.current.setValue('');
+                monacoEditorRef.current.setValue(resetVal);
               }
             }}
-            className="px-3 py-1.5 text-xs font-medium text-zinc-200 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+            className="px-3 sm:px-3.5 py-2 text-xs sm:text-sm font-medium text-zinc-200 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
           >
-            <RotateCcw className="w-3.5 h-3.5 shrink-0" />
-            <span>Xóa trắng</span>
+            <RotateCcw className="w-4 h-4 shrink-0" />
+            <span>
+              {problem.language === 'html' ? 'Khôi phục khung HTML' : 'Xóa trắng'}
+            </span>
           </button>
 
           <button
             type="button"
             onClick={onRunAndGrade}
-            className="flex-1 sm:flex-initial px-3 py-1.5 text-xs font-bold text-black bg-white hover:bg-zinc-200 border border-white transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
+            className="flex-1 sm:flex-initial px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-bold text-black bg-white hover:bg-zinc-200 border border-white transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
           >
-            <Play className="w-3.5 h-3.5 fill-current shrink-0" />
+            <Play className="w-4 h-4 fill-current shrink-0" />
             <span>Chạy thử & Chấm điểm</span>
           </button>
         </div>
       </div>
 
       {/* Code Editing Surface — Visual Studio Code (Monaco Editor vs-dark) */}
-      <div className="relative w-full h-[340px] sm:h-[380px] bg-[#1e1e1e]">
+      <div className="relative w-full h-[320px] sm:h-[400px] lg:h-[420px] bg-[#1e1e1e]">
         <Editor
           height="100%"
           language={MONACO_LANGUAGE_MAP[problem.language]}
@@ -210,19 +240,40 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
           value={code}
           onMount={handleEditorDidMount}
           onChange={(val) => {
-            const next = val ?? '';
+            const raw = val ?? '';
+            const next =
+              problem.language === 'sql' ? autoUppercaseSql(raw) : raw;
+            if (
+              problem.language === 'sql' &&
+              next !== raw &&
+              monacoEditorRef.current
+            ) {
+              const editor = monacoEditorRef.current;
+              const model = editor.getModel();
+              const currentSelection = editor.getSelection();
+              const scrollTop = editor.getScrollTop();
+              if (model && model.getValue() !== next) {
+                model.setValue(next);
+                if (currentSelection) {
+                  editor.setSelection(currentSelection);
+                }
+                editor.setScrollTop(scrollTop);
+              }
+            }
             onChangeCode(next);
           }}
           options={{
-            fontSize: 15,
-            lineHeight: 24,
+            fontSize: isCompactViewport ? 15 : 17,
+            lineHeight: isCompactViewport ? 24 : 28,
             fontFamily:
               "'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace",
-            fontLigatures: true,
+            fontLigatures: !isCompactViewport,
             cursorBlinking: 'smooth',
             cursorSmoothCaretAnimation: 'on',
             smoothScrolling: true,
-            minimap: { enabled: true },
+            minimap: { enabled: !isCompactViewport },
+            folding: !isCompactViewport,
+            lineNumbersMinChars: isCompactViewport ? 3 : 4,
             wordWrap: 'on',
             scrollBeyondLastLine: false,
             automaticLayout: true,
@@ -268,7 +319,9 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
           aria-label={`Trình soạn thảo mã ${LANGUAGE_LABELS[problem.language]}`}
           value={code}
           onChange={(e) => {
-            const next = e.target.value;
+            const raw = e.target.value;
+            const next =
+              problem.language === 'sql' ? autoUppercaseSql(raw) : raw;
             onChangeCode(next);
             setCursorOffset(e.target.selectionStart ?? next.length);
             if (

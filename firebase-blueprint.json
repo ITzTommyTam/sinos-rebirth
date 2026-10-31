@@ -221,6 +221,133 @@
         "durationSeconds",
         "createdAt"
       ]
+    },
+    "MeetRoom": {
+      "title": "MeetRoom",
+      "description": "WebRTC Meet signaling room storing SDP offer, SDP answer, and host/guest metadata.",
+      "type": "object",
+      "properties": {
+        "roomId": {
+          "type": "string",
+          "description": "Room identifier code",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "hostName": {
+          "type": "string",
+          "description": "Host student display name",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "offerSdp": {
+          "type": "string",
+          "description": "Serialized WebRTC SDP Offer with ICE candidates",
+          "minLength": 0,
+          "maxLength": 30000
+        },
+        "answerSdp": {
+          "type": "string",
+          "description": "Serialized WebRTC SDP Answer with ICE candidates",
+          "minLength": 0,
+          "maxLength": 30000
+        },
+        "sharedCode": {
+          "type": "string",
+          "description": "Collaborative code snippet shared inside the room",
+          "minLength": 0,
+          "maxLength": 20000
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last signal update"
+        }
+      },
+      "required": [
+        "roomId",
+        "hostName",
+        "offerSdp",
+        "answerSdp",
+        "sharedCode",
+        "updatedAt"
+      ]
+    },
+    "LeaderboardEntry": {
+      "title": "LeaderboardEntry",
+      "description": "Public non-PII academic leaderboard and cross-device progress sync entry keyed by deterministic syncKey.",
+      "type": "object",
+      "properties": {
+        "syncKey": {
+          "type": "string",
+          "description": "Deterministic sanitized sync key",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Student display name",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "schoolName": {
+          "type": "string",
+          "description": "High school name",
+          "minLength": 0,
+          "maxLength": 150
+        },
+        "className": {
+          "type": "string",
+          "description": "Class or grade name",
+          "minLength": 0,
+          "maxLength": 50
+        },
+        "xp": {
+          "type": "number",
+          "description": "Total accumulated XP"
+        },
+        "streakDays": {
+          "type": "number",
+          "description": "Consecutive study days"
+        },
+        "solvedCount": {
+          "type": "number",
+          "description": "Number of solved problems"
+        },
+        "solvedIds": {
+          "type": "array",
+          "description": "Bounded list of up to 500 solved problem IDs"
+        },
+        "examCount": {
+          "type": "number",
+          "description": "Number of completed mock exams"
+        },
+        "deviceLabel": {
+          "type": "string",
+          "description": "Last synced device label",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last update"
+        }
+      },
+      "required": [
+        "syncKey",
+        "displayName",
+        "schoolName",
+        "className",
+        "xp",
+        "streakDays",
+        "solvedCount",
+        "solvedIds",
+        "examCount",
+        "deviceLabel",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -235,6 +362,14 @@
     "/user_progress/{userId}/exam_attempts/{attemptId}": {
       "schema": { "$ref": "#/entities/ExamAttempt" },
       "description": "Subcollection of completed mock exam attempts belonging to the user"
+    },
+    "/meet_rooms/{roomId}": {
+      "schema": { "$ref": "#/entities/MeetRoom" },
+      "description": "WebRTC signaling rooms for live study group calls"
+    },
+    "/leaderboard/{syncKey}": {
+      "schema": { "$ref": "#/entities/LeaderboardEntry" },
+      "description": "Public non-PII leaderboard and real-time cross-device sync entries"
     }
   }
 }
