@@ -4,11 +4,14 @@ import {
   analyzeSyntax,
   autoUppercaseSql,
   executeAndGrade,
+  generateMeetRoomCode,
   getDefaultEditorCode,
   getLiveCommandOutput,
   isBlockedDevToolsShortcut,
+  parseMeetPeerPayload,
   runPythonCode,
   sanitizeHtmlForPreview,
+  serializeMeetPeerPayload,
 } from './codeEngine';
 import { INITIAL_PROBLEMS, generateInfiniteProblem } from './problemCatalog';
 import { MOCK_EXAMS, gradeMockExam } from './examCatalog';
@@ -239,3 +242,49 @@ test('Security: isBlockedDevToolsShortcut blocks F12 and DevTools/View-Source sh
   assert.equal(isBlockedDevToolsShortcut({ key: 'Enter', ctrlKey: true }), false);
   assert.equal(isBlockedDevToolsShortcut({ key: 'a', code: 'KeyA' }), false);
 });
+
+test('Meet signaling: serializeMeetPeerPayload and parseMeetPeerPayload preserve peerName, screenFrame, and stay under Firestore 30k limit', () => {
+  const raw = serializeMeetPeerPayload({
+    type: 'answer',
+    sdp: 'v=0\r\no=- 123 2 IN IP4 127.0.0.1\r\n',
+    peerId: 'peer_guest_99',
+    peerName: 'Thầy Minh (Giáo viên)',
+    isSharing: true,
+    screenFrame: 'data:image/jpeg;base64,abc123frame',
+    chatList: [{ id: 'm1', sender: 'Thầy Minh', text: 'Các em nhìn màn hình thầy nhé!', time: '09:00' }],
+    ts: 1700000000000,
+  });
+  assert.equal(raw.length <= 29000, true);
+  const parsed = parseMeetPeerPayload(raw);
+  assert.equal(parsed?.type, 'answer');
+  assert.equal(parsed?.peerId, 'peer_guest_99');
+  assert.equal(parsed?.peerName, 'Thầy Minh (Giáo viên)');
+  assert.equal(parsed?.isSharing, true);
+  assert.equal(parsed?.screenFrame, 'data:image/jpeg;base64,abc123frame');
+  assert.equal(parsed?.chatList?.length, 1);
+
+  // Oversized screenFrame (> 30k chars) is automatically stripped so Firestore write never fails
+  const hugeFrame = 'data:image/jpeg;base64,' + 'A'.repeat(32000);
+  const safeRaw = serializeMeetPeerPayload({
+    type: 'offer',
+    sdp: 'v=0\r\n',
+    peerId: 'peer_host_1',
+    peerName: 'Học sinh A',
+    isSharing: true,
+    screenFrame: hugeFrame,
+    ts: 1700000000000,
+  });
+  assert.equal(safeRaw.length <= 29000, true);
+  const safeParsed = parseMeetPeerPayload(safeRaw);
+  assert.equal(safeParsed?.peerName, 'Học sinh A');
+  assert.equal(safeParsed?.isSharing, true);
+  assert.equal(safeParsed?.screenFrame, undefined);
+
+  const code1 = generateMeetRoomCode();
+  const code2 = generateMeetRoomCode();
+  assert.equal(/^MEET-[A-Z0-9]{6}$/.test(code1), true);
+  assert.equal(/^MEET-[A-Z0-9]{6}$/.test(code2), true);
+  assert.notEqual(code1, code2);
+});
+
+

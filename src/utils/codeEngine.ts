@@ -1786,3 +1786,114 @@ export function getLiveCommandOutput(
   };
 }
 
+export interface MeetChatSyncItem {
+  id: string;
+  sender: string;
+  text: string;
+  time: string;
+}
+
+export interface MeetPeerPayload {
+  type: 'offer' | 'answer';
+  sdp: string;
+  peerId: string;
+  peerName: string;
+  isSharing: boolean;
+  screenFrame?: string;
+  chatList?: MeetChatSyncItem[];
+  ts: number;
+}
+
+/**
+ * Packs a peer's WebRTC SDP, display name, screen-sharing status/frame, and recent chat
+ * into a JSON string guaranteed to fit inside Firestore's 30,000-char limit for offerSdp/answerSdp.
+ */
+export function serializeMeetPeerPayload(payload: MeetPeerPayload): string {
+  const cleanName = (payload.peerName || 'Học Sinh THPT').trim().slice(0, 100);
+  const recentChats = (payload.chatList || []).slice(-12);
+
+  const fullObj: MeetPeerPayload = {
+    type: payload.type,
+    sdp: payload.sdp || '',
+    peerId: payload.peerId || '',
+    peerName: cleanName,
+    isSharing: Boolean(payload.isSharing),
+    screenFrame: payload.isSharing && payload.screenFrame ? payload.screenFrame : undefined,
+    chatList: recentChats,
+    ts: payload.ts || Date.now(),
+  };
+
+  const serializedFull = JSON.stringify(fullObj);
+  if (serializedFull.length <= 29000) {
+    return serializedFull;
+  }
+
+  // If screenFrame caused the payload to exceed 29,000 chars, drop screenFrame so SDP & presence still sync
+  const withoutFrame: MeetPeerPayload = {
+    ...fullObj,
+    screenFrame: undefined,
+  };
+  const serializedNoFrame = JSON.stringify(withoutFrame);
+  if (serializedNoFrame.length <= 29000) {
+    return serializedNoFrame;
+  }
+
+  // Final safety fallback with minimal chat history
+  return JSON.stringify({
+    ...withoutFrame,
+    chatList: recentChats.slice(-3),
+  }).slice(0, 29500);
+}
+
+/**
+ * Parses either a MeetPeerPayload JSON string or a legacy RTCSessionDescriptionInit JSON string.
+ */
+export function parseMeetPeerPayload(
+  raw: string | undefined | null,
+  fallbackName = 'Bạn học / Giáo viên'
+): MeetPeerPayload | null {
+  if (!raw || typeof raw !== 'string' || !raw.trim()) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+    const type = parsed.type === 'answer' ? 'answer' : parsed.type === 'offer' ? 'offer' : null;
+    if (!type || typeof parsed.sdp !== 'string') {
+      return null;
+    }
+    return {
+      type,
+      sdp: parsed.sdp,
+      peerId: typeof parsed.peerId === 'string' ? parsed.peerId : '',
+      peerName:
+        typeof parsed.peerName === 'string' && parsed.peerName.trim()
+          ? parsed.peerName.trim()
+          : fallbackName,
+      isSharing: Boolean(parsed.isSharing),
+      screenFrame: typeof parsed.screenFrame === 'string' ? parsed.screenFrame : undefined,
+      chatList: Array.isArray(parsed.chatList) ? parsed.chatList : undefined,
+      ts: typeof parsed.ts === 'number' ? parsed.ts : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Generates a unique, human-friendly Meet Room Code (e.g. "MEET-4829")
+ * guaranteed to match Firestore's isValidId rule (^[a-zA-Z0-9_-]{1,128}$).
+ */
+export function generateMeetRoomCode(): string {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let suffix = '';
+  for (let i = 0; i < 6; i++) {
+    suffix += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return `MEET-${suffix}`;
+}
+
+
+
