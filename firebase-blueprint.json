@@ -273,6 +273,76 @@
         "updatedAt"
       ]
     },
+    "MeetParticipant": {
+      "title": "MeetParticipant",
+      "description": "Individual participant presence, screen-sharing frame, and mesh signaling in a multi-person Meet room.",
+      "type": "object",
+      "properties": {
+        "participantId": {
+          "type": "string",
+          "description": "Unique peer identifier in the room",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "roomId": {
+          "type": "string",
+          "description": "Parent room identifier code",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Participant display name",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "role": {
+          "type": "string",
+          "description": "Participant role in the room",
+          "enum": ["host", "guest"],
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "isMicOn": {
+          "type": "boolean",
+          "description": "Whether participant microphone is unmuted"
+        },
+        "isSharing": {
+          "type": "boolean",
+          "description": "Whether participant is currently sharing their screen"
+        },
+        "screenFrame": {
+          "type": "string",
+          "description": "Compressed JPEG data URL of the participant shared screen",
+          "minLength": 0,
+          "maxLength": 30000
+        },
+        "signalsJson": {
+          "type": "string",
+          "description": "Serialized WebRTC mesh offers/answers from this participant",
+          "minLength": 0,
+          "maxLength": 30000
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last participant update"
+        }
+      },
+      "required": [
+        "participantId",
+        "roomId",
+        "displayName",
+        "role",
+        "isMicOn",
+        "isSharing",
+        "screenFrame",
+        "signalsJson",
+        "updatedAt"
+      ]
+    },
     "LeaderboardEntry": {
       "title": "LeaderboardEntry",
       "description": "Public non-PII academic leaderboard and cross-device progress sync entry keyed by deterministic syncKey.",
@@ -366,6 +436,10 @@
     "/meet_rooms/{roomId}": {
       "schema": { "$ref": "#/entities/MeetRoom" },
       "description": "WebRTC signaling rooms for live study group calls"
+    },
+    "/meet_rooms/{roomId}/participants/{participantId}": {
+      "schema": { "$ref": "#/entities/MeetParticipant" },
+      "description": "Subcollection of active participants in a multi-person WebRTC study room"
     },
     "/leaderboard/{syncKey}": {
       "schema": { "$ref": "#/entities/LeaderboardEntry" },

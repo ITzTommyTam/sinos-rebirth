@@ -264,6 +264,40 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidMeetParticipant(data) {
+      return data.keys().hasAll([
+          'participantId',
+          'roomId',
+          'displayName',
+          'role',
+          'isMicOn',
+          'isSharing',
+          'screenFrame',
+          'signalsJson',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'participantId',
+          'roomId',
+          'displayName',
+          'role',
+          'isMicOn',
+          'isSharing',
+          'screenFrame',
+          'signalsJson',
+          'updatedAt'
+        ]) &&
+        isValidId(data.participantId) &&
+        isValidId(data.roomId) &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+        data.role is string && data.role in ['host', 'guest'] &&
+        data.isMicOn is bool &&
+        data.isSharing is bool &&
+        data.screenFrame is string && data.screenFrame.size() >= 0 && data.screenFrame.size() <= 30000 &&
+        data.signalsJson is string && data.signalsJson.size() >= 0 && data.signalsJson.size() <= 30000 &&
+        data.updatedAt is timestamp;
+    }
+
     match /meet_rooms/{roomId} {
       allow get: if isValidId(roomId);
       allow list: if false;
@@ -272,6 +306,18 @@ service cloud.firestore {
         incoming().roomId == roomId &&
         incoming().updatedAt == request.time;
       allow delete: if false;
+
+      match /participants/{participantId} {
+        allow get: if isValidId(roomId) && isValidId(participantId);
+        allow list: if isValidId(roomId);
+        allow create, update: if isValidId(roomId) &&
+          isValidId(participantId) &&
+          isValidMeetParticipant(incoming()) &&
+          incoming().participantId == participantId &&
+          incoming().roomId == roomId &&
+          incoming().updatedAt == request.time;
+        allow delete: if isValidId(roomId) && isValidId(participantId);
+      }
     }
 
     function isValidLeaderboardEntry(data) {

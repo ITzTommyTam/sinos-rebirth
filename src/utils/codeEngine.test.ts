@@ -8,9 +8,11 @@ import {
   getDefaultEditorCode,
   getLiveCommandOutput,
   isBlockedDevToolsShortcut,
+  mergeRoomParticipants,
   parseMeetPeerPayload,
   runPythonCode,
   sanitizeHtmlForPreview,
+  selectSpotlightParticipant,
   serializeMeetPeerPayload,
 } from './codeEngine';
 import { INITIAL_PROBLEMS, generateInfiniteProblem } from './problemCatalog';
@@ -219,8 +221,11 @@ test('getDefaultEditorCode pre-populates bare HTML skeleton without title, style
   assert.equal(getDefaultEditorCode(sqlProb), '');
 });
 
-test('isIgnoredTestEntry filters out automated test accounts (such as Nguyễn Văn A) while preserving real registered users', () => {
+test('isIgnoredTestEntry filters out automated test accounts (such as Nguyễn Văn A, Học Sinh Máy 1, Bạn Học Máy 2) while preserving real registered users', () => {
   assert.equal(isIgnoredTestEntry('acct_nguyenvana_cd174226_5b8a6e42', 'Nguyễn Văn A'), true);
+  assert.equal(isIgnoredTestEntry('uid_test_playwright_m1', 'Học Sinh Máy 1'), true);
+  assert.equal(isIgnoredTestEntry('uid_test_playwright_m2', 'Bạn Học Máy 2'), true);
+  assert.equal(isIgnoredTestEntry('std_c96d290c', 'Tester'), true);
   assert.equal(isIgnoredTestEntry('std_c789ed49', 'Lê Minh Tuấn'), true);
   assert.equal(isIgnoredTestEntry('std_6fe40b0c', 'aaa'), true);
   assert.equal(isIgnoredTestEntry('acct_tamdayne2009_86881558_1465c0a2', 'ITz_Tommy (KVM,AOSP Developers)'), false);
@@ -286,5 +291,78 @@ test('Meet signaling: serializeMeetPeerPayload and parseMeetPeerPayload preserve
   assert.equal(/^MEET-[A-Z0-9]{6}$/.test(code2), true);
   assert.notEqual(code1, code2);
 });
+
+test('Multi-participant Meet: mergeRoomParticipants deduplicates peers and selectSpotlightParticipant automatically enlarges active screen sharer', () => {
+  const now = 1700000050000;
+  const merged = mergeRoomParticipants(
+    [
+      {
+        peerId: 'peer_local',
+        peerName: 'Học sinh An',
+        role: 'host',
+        isMicOn: true,
+        isSharing: false,
+        isLocal: true,
+        lastSeen: now - 5000,
+      },
+      {
+        peerId: 'peer_2',
+        peerName: 'Bạn Bình',
+        role: 'guest',
+        isMicOn: true,
+        isSharing: false,
+        lastSeen: now - 4000,
+      },
+    ],
+    [
+      {
+        peerId: 'peer_2',
+        peerName: 'Bạn Bình',
+        role: 'guest',
+        isMicOn: true,
+        isSharing: true,
+        screenFrame: 'data:image/jpeg;base64,binh_screen',
+        lastSeen: now - 1000,
+      },
+      {
+        peerId: 'peer_3',
+        peerName: 'Cô Giáo Lan',
+        role: 'guest',
+        isMicOn: true,
+        isSharing: false,
+        lastSeen: now - 500,
+      },
+      {
+        peerId: 'peer_expired',
+        peerName: 'Người cũ',
+        role: 'guest',
+        isMicOn: false,
+        isSharing: false,
+        lastSeen: now - 2_000_000, // expired > 15m
+      },
+    ],
+    now,
+    900_000
+  );
+
+  assert.equal(merged.length, 3);
+  assert.equal(merged[0].peerId, 'peer_local');
+
+  // Automatically selects Bạn Bình because Bạn Bình is sharing screen
+  const autoSpotlight = selectSpotlightParticipant(merged, null);
+  assert.equal(autoSpotlight?.peerId, 'peer_2');
+  assert.equal(autoSpotlight?.isSharing, true);
+  assert.equal(autoSpotlight?.screenFrame, 'data:image/jpeg;base64,binh_screen');
+
+  // Explicit pin overrides automatic selection
+  const pinnedSpotlight = selectSpotlightParticipant(merged, 'peer_3');
+  assert.equal(pinnedSpotlight?.peerId, 'peer_3');
+  assert.equal(pinnedSpotlight?.peerName, 'Cô Giáo Lan');
+
+  // Exiting spotlight (dismissedPeerId) hides the enlarged stage until re-pinned
+  const dismissedSpotlight = selectSpotlightParticipant(merged, null, 'peer_2');
+  assert.equal(dismissedSpotlight, null);
+});
+
 
 

@@ -1793,33 +1793,148 @@ export interface MeetChatSyncItem {
   time: string;
 }
 
+export interface MeetParticipantInfo {
+  peerId: string;
+  peerName: string;
+  role: 'host' | 'guest';
+  isMicOn: boolean;
+  isSharing: boolean;
+  screenFrame?: string;
+  isLocal?: boolean;
+  lastSeen: number;
+}
+
+export interface MeetMeshSignal {
+  fromPeerId: string;
+  fromPeerName: string;
+  toPeerId: string;
+  type: 'offer' | 'answer';
+  sdp: string;
+  ts: number;
+}
+
 export interface MeetPeerPayload {
   type: 'offer' | 'answer';
   sdp: string;
   peerId: string;
   peerName: string;
+  isMicOn?: boolean;
   isSharing: boolean;
   screenFrame?: string;
   chatList?: MeetChatSyncItem[];
+  participants?: MeetParticipantInfo[];
+  meshSignals?: MeetMeshSignal[];
   ts: number;
 }
 
 /**
- * Packs a peer's WebRTC SDP, display name, screen-sharing status/frame, and recent chat
- * into a JSON string guaranteed to fit inside Firestore's 30,000-char limit for offerSdp/answerSdp.
+ * Merges and deduplicates multiple participants in a Meet room, filtering out stale participants
+ * and keeping the freshest state (isSharing, screenFrame, isMicOn, peerName) for each peerId.
+ */
+export function mergeRoomParticipants(
+  existing: MeetParticipantInfo[],
+  incoming: MeetParticipantInfo[],
+  now = Date.now(),
+  ttlMs = 900_000
+): MeetParticipantInfo[] {
+  const byId = new Map<string, MeetParticipantInfo>();
+
+  for (const item of [...existing, ...incoming]) {
+    if (!item || !item.peerId) continue;
+    const itemTs = typeof item.lastSeen === 'number' && item.lastSeen > 0 ? item.lastSeen : now;
+    if (now - itemTs > ttlMs && !item.isLocal) {
+      continue;
+    }
+    const prev = byId.get(item.peerId);
+    if (!prev || itemTs >= prev.lastSeen || item.isLocal) {
+      byId.set(item.peerId, {
+        peerId: item.peerId,
+        peerName: (item.peerName || prev?.peerName || 'Thành viên').trim().slice(0, 100),
+        role: item.role || prev?.role || 'guest',
+        isMicOn: typeof item.isMicOn === 'boolean' ? item.isMicOn : (prev?.isMicOn ?? true),
+        isSharing: Boolean(item.isSharing),
+        screenFrame: item.isSharing ? (item.screenFrame ?? prev?.screenFrame) : undefined,
+        isLocal: Boolean(item.isLocal || prev?.isLocal),
+        lastSeen: itemTs,
+      });
+    }
+  }
+
+  return Array.from(byId.values()).sort((a, b) => {
+    if (a.isLocal !== b.isLocal) return a.isLocal ? -1 : 1;
+    if (a.isSharing !== b.isSharing) return a.isSharing ? -1 : 1;
+    return a.peerName.localeCompare(b.peerName, 'vi');
+  });
+}
+
+/**
+ * Selects which participant should be enlarged in the primary Spotlight Stage:
+ * 1. Explicitly pinned participant (if present in room)
+ * 2. Most recent remote participant who is actively sharing their screen (isSharing === true)
+ * 3. Local participant if they are actively sharing their screen (isSharing === true)
+ * 4. null if no one is sharing or pinned
+ */
+export function selectSpotlightParticipant(
+  participants: MeetParticipantInfo[],
+  pinnedPeerId?: string | null,
+  dismissedPeerId?: string | null
+): MeetParticipantInfo | null {
+  if (!Array.isArray(participants) || participants.length === 0) {
+    return null;
+  }
+
+  if (pinnedPeerId) {
+    const pinned = participants.find((p) => p.peerId === pinnedPeerId);
+    if (pinned) {
+      return pinned;
+    }
+  }
+
+  const remoteSharers = participants
+    .filter((p) => !p.isLocal && p.isSharing && p.peerId !== dismissedPeerId)
+    .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+  if (remoteSharers.length > 0) {
+    return remoteSharers[0];
+  }
+
+  const localSharer = participants.find(
+    (p) => p.isLocal && p.isSharing && p.peerId !== dismissedPeerId
+  );
+  if (localSharer) {
+    return localSharer;
+  }
+
+  return null;
+}
+
+/**
+ * Packs a peer's WebRTC SDP, display name, multi-participant roster, screen-sharing status/frame,
+ * and recent chat into a JSON string guaranteed to fit inside Firestore's 30,000-char limit.
  */
 export function serializeMeetPeerPayload(payload: MeetPeerPayload): string {
   const cleanName = (payload.peerName || 'Học Sinh THPT').trim().slice(0, 100);
   const recentChats = (payload.chatList || []).slice(-12);
+  const compactParticipants = (payload.participants || []).slice(0, 12).map((p) => ({
+    peerId: p.peerId,
+    peerName: (p.peerName || 'Thành viên').slice(0, 60),
+    role: p.role,
+    isMicOn: Boolean(p.isMicOn),
+    isSharing: Boolean(p.isSharing),
+    lastSeen: p.lastSeen || Date.now(),
+  }));
+  const compactSignals = (payload.meshSignals || []).slice(-6);
 
   const fullObj: MeetPeerPayload = {
     type: payload.type,
     sdp: payload.sdp || '',
     peerId: payload.peerId || '',
     peerName: cleanName,
+    isMicOn: typeof payload.isMicOn === 'boolean' ? payload.isMicOn : true,
     isSharing: Boolean(payload.isSharing),
     screenFrame: payload.isSharing && payload.screenFrame ? payload.screenFrame : undefined,
     chatList: recentChats,
+    participants: compactParticipants.length > 0 ? compactParticipants : undefined,
+    meshSignals: compactSignals.length > 0 ? compactSignals : undefined,
     ts: payload.ts || Date.now(),
   };
 
@@ -1828,7 +1943,7 @@ export function serializeMeetPeerPayload(payload: MeetPeerPayload): string {
     return serializedFull;
   }
 
-  // If screenFrame caused the payload to exceed 29,000 chars, drop screenFrame so SDP & presence still sync
+  // Drop screenFrame first if payload exceeds 29,000 chars
   const withoutFrame: MeetPeerPayload = {
     ...fullObj,
     screenFrame: undefined,
@@ -1838,11 +1953,13 @@ export function serializeMeetPeerPayload(payload: MeetPeerPayload): string {
     return serializedNoFrame;
   }
 
-  // Final safety fallback with minimal chat history
-  return JSON.stringify({
+  // Drop meshSignals next if still oversized
+  const withoutSignals: MeetPeerPayload = {
     ...withoutFrame,
+    meshSignals: undefined,
     chatList: recentChats.slice(-3),
-  }).slice(0, 29500);
+  };
+  return JSON.stringify(withoutSignals).slice(0, 29500);
 }
 
 /**
@@ -1872,9 +1989,12 @@ export function parseMeetPeerPayload(
         typeof parsed.peerName === 'string' && parsed.peerName.trim()
           ? parsed.peerName.trim()
           : fallbackName,
+      isMicOn: typeof parsed.isMicOn === 'boolean' ? parsed.isMicOn : true,
       isSharing: Boolean(parsed.isSharing),
       screenFrame: typeof parsed.screenFrame === 'string' ? parsed.screenFrame : undefined,
       chatList: Array.isArray(parsed.chatList) ? parsed.chatList : undefined,
+      participants: Array.isArray(parsed.participants) ? parsed.participants : undefined,
+      meshSignals: Array.isArray(parsed.meshSignals) ? parsed.meshSignals : undefined,
       ts: typeof parsed.ts === 'number' ? parsed.ts : 0,
     };
   } catch {
@@ -1883,7 +2003,7 @@ export function parseMeetPeerPayload(
 }
 
 /**
- * Generates a unique, human-friendly Meet Room Code (e.g. "MEET-4829")
+ * Generates a unique, human-friendly Meet Room Code (e.g. "MEET-4829AB")
  * guaranteed to match Firestore's isValidId rule (^[a-zA-Z0-9_-]{1,128}$).
  */
 export function generateMeetRoomCode(): string {
@@ -1894,6 +2014,7 @@ export function generateMeetRoomCode(): string {
   }
   return `MEET-${suffix}`;
 }
+
 
 
 

@@ -29,21 +29,47 @@ const STORAGE_KEY = 'thpt_qt_tin_thpt_progress_v2';
 const IGNORED_TEST_SYNC_KEYS = new Set([
   'std_c789ed49',
   'std_6fe40b0c',
+  'std_64dfa23b',
+  'std_a3d7408c',
+  'std_c96d290c',
+  'std_733fdb69',
   'acct_nguyenvana_cd174226_5b8a6e42',
+  'uid_test_playwright_m1',
+  'uid_test_playwright_m2',
+]);
+
+const IGNORED_TEST_NAMES = new Set([
+  'nguyễn văn a',
+  'học sinh máy 1',
+  'bạn học máy 2',
+  'lê minh tuấn',
+  'tester',
+  'aaa',
+  'a',
+  't',
 ]);
 
 export function isIgnoredTestEntry(syncKey?: string, displayName?: string): boolean {
   const key = (syncKey || '').trim();
+  const lowerKey = key.toLowerCase();
   if (
     IGNORED_TEST_SYNC_KEYS.has(key) ||
-    key.startsWith('acct_nguyenvana') ||
-    key.startsWith('usr_test_') ||
-    key.startsWith('test_')
+    lowerKey.startsWith('acct_nguyenvana') ||
+    lowerKey.startsWith('usr_test_') ||
+    lowerKey.startsWith('uid_test_') ||
+    lowerKey.startsWith('test_') ||
+    lowerKey.includes('playwright')
   ) {
     return true;
   }
   const normName = (displayName || '').trim().toLowerCase();
-  if (normName === 'nguyễn văn a' || normName === 'aaa' || normName.startsWith('test_')) {
+  if (
+    IGNORED_TEST_NAMES.has(normName) ||
+    normName.startsWith('test_') ||
+    normName.includes('playwright') ||
+    normName.includes('học sinh máy ') ||
+    normName.includes('bạn học máy ')
+  ) {
     return true;
   }
   return false;
@@ -405,8 +431,16 @@ export async function syncProgressWithCloud(
     ''
   ).slice(0, 150);
 
+  const isAutomatedWebdriver =
+    typeof navigator !== 'undefined' && Boolean(navigator.webdriver);
+
   // Write unified state to /leaderboard/{syncKey} so both Leaderboard and Cross-Device Sync stay 100% up-to-date
-  if (lbRef && syncKey && (localState.profileCompleted || displayName !== 'Học Sinh' || authEmail)) {
+  if (
+    lbRef &&
+    syncKey &&
+    !(isAutomatedWebdriver && syncKey.startsWith('std_')) &&
+    (localState.profileCompleted || displayName !== 'Học Sinh' || authEmail)
+  ) {
     const lbPayload = {
       syncKey,
       displayName,
