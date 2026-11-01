@@ -69,6 +69,31 @@ export function isBlockedDevToolsShortcut(e: ShortcutEventLike): boolean {
   return false;
 }
 
+/**
+ * Pure helper that detects whether a keyboard event matches Copy (Ctrl+C / Cmd+C)
+ * or Paste (Ctrl+V / Cmd+V) shortcuts so they can be blocked across the application and code editor.
+ */
+export function isBlockedCopyPasteShortcut(e: ShortcutEventLike): boolean {
+  if (!e) return false;
+  const upperKey = (e.key || '').toUpperCase();
+  const upperCode = (e.code || '').toUpperCase();
+
+  if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+    if (
+      upperKey === 'C' ||
+      upperKey === 'V' ||
+      upperCode === 'KEYC' ||
+      upperCode === 'KEYV' ||
+      e.keyCode === 67 ||
+      e.keyCode === 86
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 const SQL_KEYWORDS_AND_FUNCTIONS = new Set([
   // SQL Functions (Aggregate, Scalar, String, Date, Math, Null-handling)
   'COUNT', 'SUM', 'AVG', 'MAX', 'MIN', 'ROUND', 'ABS', 'CEIL', 'CEILING', 'FLOOR',

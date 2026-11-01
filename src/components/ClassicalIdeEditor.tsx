@@ -123,8 +123,25 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
       runCallbackRef.current();
     });
 
-    // Make Tab key strictly indent/outdent (never accept autocomplete suggestions)
+    // Block Ctrl + C / Cmd + C and Ctrl + V / Cmd + V inside Monaco Editor
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyC, () => {});
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyV, () => {});
+    editor.addCommand(
+      monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyV,
+      () => {}
+    );
+
+    // Make Tab key strictly indent/outdent and block Copy/Paste keydowns inside Monaco
     editor.onKeyDown((e) => {
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        (e.keyCode === monaco.KeyCode.KeyC || e.keyCode === monaco.KeyCode.KeyV)
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (e.keyCode === monaco.KeyCode.Tab && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         e.stopPropagation();
@@ -132,6 +149,26 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
         editor.trigger('keyboard', e.shiftKey ? 'outdent' : 'tab', {});
       }
     });
+
+    const domNode = editor.getDomNode();
+    if (domNode) {
+      domNode.addEventListener(
+        'copy',
+        (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+        },
+        { capture: true }
+      );
+      domNode.addEventListener(
+        'paste',
+        (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+        },
+        { capture: true }
+      );
+    }
 
     // Update cursor offset for the live statement output bar
     editor.onDidChangeCursorPosition((e) => {
@@ -183,7 +220,17 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
   const warningCount = diagnostics.filter((d) => d.severity === 'warning').length;
 
   return (
-    <div className="flex flex-col border-2 border-zinc-900 bg-zinc-950 text-white rounded-none overflow-hidden min-w-0">
+    <div
+      onCopy={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onPaste={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      className="flex flex-col border-2 border-zinc-900 bg-zinc-950 text-white rounded-none overflow-hidden min-w-0"
+    >
       {/* Editor Top Utility Strip — Original UI Shell */}
       <div className="flex flex-wrap items-center justify-between gap-2.5 px-3 sm:px-4 py-2.5 sm:py-3 bg-black border-b border-zinc-800">
         <div className="flex flex-wrap items-center gap-2 text-base sm:text-lg text-zinc-300 min-w-0">
@@ -222,8 +269,9 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
 
           <button
             type="button"
+            data-testid="run-grade-btn"
             onClick={onRunAndGrade}
-            className="flex-1 sm:flex-initial px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-bold text-black bg-white hover:bg-zinc-200 border border-white transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
+            className="flex-1 sm:flex-initial px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-bold text-black bg-emerald-400 hover:bg-emerald-300 border border-emerald-300 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
           >
             <Play className="w-4 h-4 fill-current shrink-0" />
             <span>Chạy thử & Chấm điểm</span>
@@ -271,6 +319,7 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
             cursorBlinking: 'smooth',
             cursorSmoothCaretAnimation: 'on',
             smoothScrolling: true,
+            contextmenu: false,
             minimap: { enabled: !isCompactViewport },
             folding: !isCompactViewport,
             lineNumbersMinChars: isCompactViewport ? 3 : 4,
@@ -303,7 +352,7 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
             },
             tabSize: 4,
             insertSpaces: true,
-            formatOnPaste: true,
+            formatOnPaste: false,
             formatOnType: true,
           }}
           loading={
@@ -318,6 +367,14 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
           data-testid="code-editor-textarea"
           aria-label={`Trình soạn thảo mã ${LANGUAGE_LABELS[problem.language]}`}
           value={code}
+          onCopy={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onPaste={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
           onChange={(e) => {
             const raw = e.target.value;
             const next =
@@ -356,26 +413,24 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
         </div>
       </div>
 
-      {/* Real-time Syntax & Linter Status Footer — Original UI Shell */}
-      <div className="px-4 py-2.5 bg-black border-t border-zinc-800 text-xs sm:text-sm">
-        {diagnostics.length === 0 ? (
-          <div className="flex items-center justify-between text-white gap-2">
+      {/* Real-time Syntax & Linter Status Footer */}
+      <div className="px-4 py-3 bg-black border-t border-zinc-800 text-xs sm:text-sm space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          {diagnostics.length === 0 ? (
             <span className="flex items-center gap-1.5 font-medium text-emerald-400">
               <CheckCircle2 className="w-4 h-4 shrink-0" />
               [OK] Kiểm tra cú pháp thời gian thực: HỢP LỆ (0 lỗi cú pháp, sẵn sàng chấm điểm)
             </span>
-            <span className="text-zinc-400 hidden md:inline shrink-0">
-              Phím tắt: Ctrl + Enter để chạy thử
+          ) : (
+            <span className="flex items-center gap-1.5 text-amber-300 font-semibold">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              [!] Phát hiện {errorCount} lỗi cú pháp · {warningCount} cảnh báo theo thời gian thực:
             </span>
-          </div>
-        ) : (
+          )}
+        </div>
+
+        {diagnostics.length > 0 && (
           <div className="space-y-2">
-            <div className="flex items-center justify-between text-amber-300 font-semibold">
-              <span className="flex items-center gap-1.5">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                [!] Phát hiện {errorCount} lỗi cú pháp · {warningCount} cảnh báo theo thời gian thực:
-              </span>
-            </div>
             <ul className="space-y-1 max-h-28 overflow-y-auto pr-1">
               {diagnostics.map((d, index) => (
                 <li
@@ -410,3 +465,4 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
     </div>
   );
 };
+

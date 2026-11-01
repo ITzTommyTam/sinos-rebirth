@@ -7,6 +7,7 @@ import {
   generateMeetRoomCode,
   getDefaultEditorCode,
   getLiveCommandOutput,
+  isBlockedCopyPasteShortcut,
   isBlockedDevToolsShortcut,
   mergeRoomParticipants,
   parseMeetPeerPayload,
@@ -241,11 +242,27 @@ test('Security: isBlockedDevToolsShortcut blocks F12 and DevTools/View-Source sh
   assert.equal(isBlockedDevToolsShortcut({ key: 'i', metaKey: true, altKey: true }), true);
   assert.equal(isBlockedDevToolsShortcut({ key: 'u', ctrlKey: true, shiftKey: false }), true);
 
-  // Standard editor shortcuts & typing must remain allowed
+  // Standard editor shortcuts & typing must remain allowed by DevTools blocker
   assert.equal(isBlockedDevToolsShortcut({ key: 'c', ctrlKey: true, shiftKey: false }), false);
   assert.equal(isBlockedDevToolsShortcut({ key: 'v', ctrlKey: true, shiftKey: false }), false);
   assert.equal(isBlockedDevToolsShortcut({ key: 'Enter', ctrlKey: true }), false);
   assert.equal(isBlockedDevToolsShortcut({ key: 'a', code: 'KeyA' }), false);
+});
+
+test('Security: isBlockedCopyPasteShortcut blocks Ctrl+C, Ctrl+V, Cmd+C, and Cmd+V while allowing normal typing and Ctrl+Enter', () => {
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'c', ctrlKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'C', ctrlKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'v', ctrlKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'V', ctrlKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ code: 'KeyC', ctrlKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ code: 'KeyV', metaKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ keyCode: 67, ctrlKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ keyCode: 86, metaKey: true }), true);
+
+  // Normal typing 'c', 'v' or running Ctrl+Enter must remain allowed
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'c', ctrlKey: false }), false);
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'v', ctrlKey: false }), false);
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'Enter', ctrlKey: true }), false);
 });
 
 test('Meet signaling: serializeMeetPeerPayload and parseMeetPeerPayload preserve peerName, screenFrame, and stay under Firestore 30k limit', () => {

@@ -35,6 +35,7 @@ import {
   autoUppercaseSql,
   executeAndGrade,
   getDefaultEditorCode,
+  isBlockedCopyPasteShortcut,
   isBlockedDevToolsShortcut,
   sanitizeHtmlForPreview,
 } from './utils/codeEngine';
@@ -141,7 +142,18 @@ export default function App() {
         );
         return false;
       }
+      if (isBlockedCopyPasteShortcut(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+      }
       return undefined;
+    };
+
+    const handleCopyPaste = (e: ClipboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
     };
 
     const handleContextMenu = (e: MouseEvent) => {
@@ -155,11 +167,19 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown, { capture: true });
     document.addEventListener('keydown', handleKeyDown, { capture: true });
+    window.addEventListener('copy', handleCopyPaste, { capture: true });
+    document.addEventListener('copy', handleCopyPaste, { capture: true });
+    window.addEventListener('paste', handleCopyPaste, { capture: true });
+    document.addEventListener('paste', handleCopyPaste, { capture: true });
     window.addEventListener('contextmenu', handleContextMenu, { capture: true });
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown, { capture: true });
       document.removeEventListener('keydown', handleKeyDown, { capture: true });
+      window.removeEventListener('copy', handleCopyPaste, { capture: true });
+      document.removeEventListener('copy', handleCopyPaste, { capture: true });
+      window.removeEventListener('paste', handleCopyPaste, { capture: true });
+      document.removeEventListener('paste', handleCopyPaste, { capture: true });
       window.removeEventListener('contextmenu', handleContextMenu, { capture: true });
       if (securityAlertTimerRef.current) {
         window.clearTimeout(securityAlertTimerRef.current);
@@ -399,8 +419,16 @@ export default function App() {
     return saved ?? '';
   }, [editorCodeMap, selectedProblem]);
 
-  // Deferred code for live HTML iframe preview so typing never lags on mobile/tablet/desktop
+  // Deferred code for live HTML iframe preview & real-time grading so typing never lags on mobile/tablet/desktop
   const deferredPreviewCode = useDeferredValue(currentCode);
+
+  // Live automatic grading report updated continuously as student types code
+  const liveGradingReport = useMemo(
+    () => executeAndGrade(selectedProblem, deferredPreviewCode),
+    [selectedProblem, deferredPreviewCode]
+  );
+
+  const activeGradingReport = executionReport ?? liveGradingReport;
 
   const effectiveModeFilter: 'ALL' | PracticeMode =
     activeSection === 'algorithms' ? 'algorithm' : modeFilter;
@@ -470,16 +498,55 @@ export default function App() {
   const handleChangeCode = (nextCode: string) => {
     const normalizedCode =
       selectedProblem.language === 'sql' ? autoUppercaseSql(nextCode) : nextCode;
+    // Clear manual executionReport override so liveGradingReport updates immediately as student types
+    setExecutionReport(null);
     setEditorCodeMap((prev) => {
       const updated = { ...prev, [selectedProblem.id]: normalizedCode };
       if (saveDebounceRef.current !== null) {
         window.clearTimeout(saveDebounceRef.current);
       }
       saveDebounceRef.current = window.setTimeout(() => {
-        saveLocalProgress({
-          ...latestProgressRef.current,
-          savedCodeByProblem: updated,
-        });
+        const autoReport = executeAndGrade(selectedProblem, normalizedCode);
+        const curProg = latestProgressRef.current;
+        const alreadySolved = curProg.solvedIds.includes(selectedProblem.id);
+        if (autoReport.passedAll && !alreadySolved) {
+          const nextSolvedIds = [
+            ...curProg.solvedIds,
+            selectedProblem.id,
+          ].slice(0, 500);
+          const autoSub: SubmissionItem = {
+            submissionId: `sub_${Date.now()}`,
+            userId: firebaseUser ? firebaseUser.uid : curProg.userId,
+            problemId: selectedProblem.id,
+            problemTitle: selectedProblem.title,
+            language: selectedProblem.language,
+            difficulty: selectedProblem.difficulty,
+            code: normalizedCode,
+            passed: true,
+            score: autoReport.score,
+            createdAtIso: new Date().toISOString(),
+          };
+          const nextProg: UserProgressState = {
+            ...curProg,
+            xp: curProg.xp + selectedProblem.xpReward,
+            solvedIds: nextSolvedIds,
+            solvedCount: nextSolvedIds.length,
+            lastSyncedIso: new Date().toISOString(),
+            submissions: [autoSub, ...curProg.submissions].slice(0, 35),
+            savedCodeByProblem: updated,
+          };
+          setProgress(nextProg);
+          saveLocalProgress(nextProg);
+          const uidToUse = firebaseUser ? firebaseUser.uid : nextProg.userId;
+          recordCloudSubmission(uidToUse, autoSub, nextProg)
+            .then((synced) => setProgress(synced))
+            .catch(() => {});
+        } else {
+          saveLocalProgress({
+            ...curProg,
+            savedCodeByProblem: updated,
+          });
+        }
       }, 280);
       return updated;
     });
@@ -1583,34 +1650,51 @@ export default function App() {
                 </div>
               )}
 
-              {/* Execution & Automated Grading Output Panel */}
-              {executionReport && (
-                <div className="p-5 sm:p-6 bg-white border-2 border-black space-y-4 animate-fade-slide">
-                  <div className="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-300 pb-3">
-                    <div className="flex items-center gap-2">
-                      {executionReport.passedAll ? (
-                        <CheckCircle2 className="w-6 h-6 text-black shrink-0" />
-                      ) : (
-                        <XCircle className="w-6 h-6 text-black shrink-0" />
-                      )}
-                      <div>
-                        <h3 className="text-sm sm:text-base font-bold text-black">
-                          {executionReport.passedAll
-                            ? '[ACCEPTED] CHẤM ĐIỂM THÀNH CÔNG: ĐẠT TẤT CẢ KIỂM THỬ'
+              {/* Always-Visible Execution & Automated Grading Output Panel (Updates Live While Typing Code) */}
+              <div
+                data-testid="grading-output-panel"
+                className="p-5 sm:p-6 bg-white border-2 border-black space-y-4 animate-fade-slide"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-300 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    {activeGradingReport.passedAll ? (
+                      <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
+                    ) : (
+                      <XCircle className="w-6 h-6 text-black shrink-0" />
+                    )}
+                    <div>
+                      <div className="text-[11px] font-bold uppercase tracking-wide text-zinc-600">
+                        HỆ THỐNG CHẤM ĐIỂM TỰ ĐỘNG THEO THỜI GIAN THỰC
+                      </div>
+                      <h3
+                        data-testid="grading-status-heading"
+                        className="text-sm sm:text-base font-bold text-black"
+                      >
+                        {activeGradingReport.passedAll
+                          ? '[ACCEPTED] CHẤM ĐIỂM THÀNH CÔNG: ĐẠT TẤT CẢ KIỂM THỬ'
+                          : !currentCode.trim()
+                            ? '[CHƯA NHẬP CODE] HÃY GÕ CODE BÊN TRÊN ĐỂ HỆ THỐNG TỰ ĐỘNG CHẤM ĐIỂM'
                             : '[!] CHƯA ĐẠT TOÀN BỘ KIỂM THỬ — HÃY KIỂM TRA CHI TIẾT BÊN DƯỚI'}
-                        </h3>
-                        <div className="text-xs text-zinc-600 tabular-nums">
-                          Vượt qua {executionReport.passedCount}/
-                          {executionReport.totalCount} tiêu chí · Điểm bài:{' '}
-                          {executionReport.score}/{executionReport.maxScore} XP ·
-                          Thời gian: {executionReport.executionTimeMs}ms
-                        </div>
+                      </h3>
+                      <div
+                        data-testid="grading-score-summary"
+                        className="text-xs sm:text-sm font-semibold text-zinc-700 tabular-nums mt-0.5"
+                      >
+                        Vượt qua {activeGradingReport.passedCount}/
+                        {activeGradingReport.totalCount} tiêu chí · Điểm bài:{' '}
+                        <strong className="text-black">
+                          {activeGradingReport.score}/{activeGradingReport.maxScore} XP
+                        </strong>{' '}
+                        · Thời gian: {activeGradingReport.executionTimeMs}ms
                       </div>
                     </div>
                   </div>
+                </div>
 
-                  {/* Gentle Hint Shown ONLY When Student Fails Grading */}
-                  {!executionReport.passedAll && selectedProblem.hints.length > 0 && (
+                {/* Gentle Hint Shown When Student Has Typed Code That Has Not Yet Passed */}
+                {!activeGradingReport.passedAll &&
+                  currentCode.trim().length > 0 &&
+                  selectedProblem.hints.length > 0 && (
                     <div
                       data-testid="gentle-failure-hint"
                       className="p-3.5 bg-zinc-100 border-l-4 border-black text-xs sm:text-sm text-zinc-900 space-y-1"
@@ -1624,89 +1708,88 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Console Output / SQL Result Set */}
-                  <div className="p-3 bg-zinc-950 text-white font-mono-tabular text-xs border border-zinc-900 space-y-1">
-                    <div className="text-zinc-400 flex items-center gap-1.5">
-                      <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Kết quả đầu ra chuẩn (Standard Output):</span>
-                    </div>
-                    <pre className="whitespace-pre-wrap text-emerald-400">
-                      {executionReport.stdout}
-                    </pre>
+                {/* Console Output / SQL Result Set */}
+                <div className="p-3 bg-zinc-950 text-white font-mono-tabular text-xs border border-zinc-900 space-y-1">
+                  <div className="text-zinc-400 flex items-center gap-1.5">
+                    <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Kết quả đầu ra chuẩn (Standard Output):</span>
                   </div>
+                  <pre className="whitespace-pre-wrap text-emerald-400">
+                    {activeGradingReport.stdout}
+                  </pre>
+                </div>
 
-                  {executionReport.sqlResultTable &&
-                    executionReport.sqlResultTable.rows.length > 0 && (
-                      <div className="overflow-x-auto border border-zinc-900 p-3 bg-zinc-100">
-                        <div className="text-xs font-bold text-black mb-2">
-                          Bảng kết quả truy vấn SQL của bạn:
-                        </div>
-                        <table className="w-full border-collapse text-xs font-mono-tabular">
-                          <thead>
-                            <tr className="border-b border-zinc-900 text-left text-zinc-600">
-                              {executionReport.sqlResultTable.columns.map(
-                                (col) => (
-                                  <th key={col} className="py-1.5 pr-3">
-                                    {col}
-                                  </th>
-                                )
-                              )}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {executionReport.sqlResultTable.rows.map(
-                              (row, idx) => (
-                                <tr
-                                  key={idx}
-                                  className="border-b border-zinc-300"
-                                >
-                                  {executionReport.sqlResultTable!.columns.map(
-                                    (col) => (
-                                      <td key={col} className="py-1.5 pr-3">
-                                        {String(row[col] ?? '')}
-                                      </td>
-                                    )
-                                  )}
-                                </tr>
+                {activeGradingReport.sqlResultTable &&
+                  activeGradingReport.sqlResultTable.rows.length > 0 && (
+                    <div className="overflow-x-auto border border-zinc-900 p-3 bg-zinc-100">
+                      <div className="text-xs font-bold text-black mb-2">
+                        Bảng kết quả truy vấn SQL của bạn:
+                      </div>
+                      <table className="w-full border-collapse text-xs font-mono-tabular">
+                        <thead>
+                          <tr className="border-b border-zinc-900 text-left text-zinc-600">
+                            {activeGradingReport.sqlResultTable.columns.map(
+                              (col) => (
+                                <th key={col} className="py-1.5 pr-3">
+                                  {col}
+                                </th>
                               )
                             )}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activeGradingReport.sqlResultTable.rows.map(
+                            (row, idx) => (
+                              <tr
+                                key={idx}
+                                className="border-b border-zinc-300"
+                              >
+                                {activeGradingReport.sqlResultTable!.columns.map(
+                                  (col) => (
+                                    <td key={col} className="py-1.5 pr-3">
+                                      {String(row[col] ?? '')}
+                                    </td>
+                                  )
+                                )}
+                              </tr>
+                            )
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
 
-                  {/* Per-TestCase Breakdown */}
-                  <div className="space-y-2">
-                    <div className="text-xs font-bold text-black">
-                      Chi tiết từng bộ kiểm thử (Test Cases):
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {executionReport.testResults.map((tr) => (
-                        <div
-                          key={tr.id}
-                          className={`p-3 border text-xs space-y-1 ${
-                            tr.passed
-                              ? 'bg-zinc-100 border-black'
-                              : 'bg-white border-2 border-black'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between font-bold text-black">
-                            <span>{tr.label}</span>
-                            <span>
-                              {tr.passed ? '✓ ĐẠT' : '! SAI KẾT QUẢ'}
-                            </span>
-                          </div>
-                          <div className="font-mono-tabular text-[11px] text-zinc-700">
-                            <div>Đầu vào: {tr.inputSummary}</div>
-                            <div>Kỳ vọng: {tr.expectedSummary}</div>
-                            <div>Thực tế: {tr.actualSummary}</div>
-                          </div>
+                {/* Per-TestCase Breakdown */}
+                <div className="space-y-2">
+                  <div className="text-xs font-bold text-black">
+                    Chi tiết từng bộ kiểm thử (Test Cases):
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {activeGradingReport.testResults.map((tr) => (
+                      <div
+                        key={tr.id}
+                        className={`p-3 border text-xs space-y-1 ${
+                          tr.passed
+                            ? 'bg-zinc-100 border-black'
+                            : 'bg-white border-2 border-black'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between font-bold text-black">
+                          <span>{tr.label}</span>
+                          <span>
+                            {tr.passed ? '✓ ĐẠT' : '! SAI KẾT QUẢ'}
+                          </span>
                         </div>
-                      ))}
-                    </div>
+                        <div className="font-mono-tabular text-[11px] text-zinc-700">
+                          <div>Đầu vào: {tr.inputSummary}</div>
+                          <div>Kỳ vọng: {tr.expectedSummary}</div>
+                          <div>Thực tế: {tr.actualSummary}</div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              )}
+              </div>
             </section>
           </div>
         )}
@@ -1741,6 +1824,7 @@ export default function App() {
             currentEditorCode={currentCode}
             onApplySharedCodeToEditor={(codeFromMeet) => {
               handleChangeCode(codeFromMeet);
+              setExecutionReport(executeAndGrade(selectedProblem, codeFromMeet));
               setActiveSection('practice');
             }}
           />
