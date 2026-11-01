@@ -12,10 +12,72 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet" />
-    <script type="module" crossorigin src="./assets/index-6_gEgAFt.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-KWEZF1Ad.css">
+    <script>
+      (function () {
+        var blockClip = function (e) {
+          if (e && e.clipboardData) {
+            try {
+              e.clipboardData.setData('text/plain', '');
+              e.clipboardData.setData('text/html', '');
+              e.clipboardData.clearData();
+            } catch (_) {}
+          }
+          try {
+            if (window.getSelection) {
+              var sel = window.getSelection();
+              if (sel && sel.removeAllRanges) sel.removeAllRanges();
+            }
+          } catch (_) {}
+          if (e) {
+            if (e.preventDefault) e.preventDefault();
+            if (e.stopPropagation) e.stopPropagation();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+          }
+          return false;
+        };
+        var blockBeforeInput = function (e) {
+          var t = e && e.inputType ? String(e.inputType) : '';
+          if (
+            t === 'insertFromPaste' ||
+            t === 'insertFromPasteAsQuotation' ||
+            t === 'insertFromDrop' ||
+            t === 'insertFromYank' ||
+            t === 'deleteByCut' ||
+            t === 'deleteByDrag'
+          ) {
+            return blockClip(e);
+          }
+        };
+        var blockKeys = function (e) {
+          if (!e) return;
+          var k = String(e.key || '').toUpperCase();
+          var c = String(e.code || '').toUpperCase();
+          var kc = e.keyCode || e.which;
+          if (
+            ((e.ctrlKey || e.metaKey) &&
+              !e.altKey &&
+              (k === 'C' || k === 'V' || k === 'X' || k === 'INSERT' ||
+               c === 'KEYC' || c === 'KEYV' || c === 'KEYX' || c === 'INSERT' ||
+               kc === 67 || kc === 86 || kc === 88 || kc === 45)) ||
+            (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && (k === 'INSERT' || c === 'INSERT' || kc === 45))
+          ) {
+            return blockClip(e);
+          }
+        };
+        ['copy', 'cut', 'paste', 'dragstart', 'drop'].forEach(function (ev) {
+          window.addEventListener(ev, blockClip, { capture: true });
+          document.addEventListener(ev, blockClip, { capture: true });
+        });
+        window.addEventListener('beforeinput', blockBeforeInput, { capture: true });
+        document.addEventListener('beforeinput', blockBeforeInput, { capture: true });
+        window.addEventListener('keydown', blockKeys, { capture: true });
+        document.addEventListener('keydown', blockKeys, { capture: true });
+      })();
+    </script>
+    <script type="module" crossorigin src="./assets/index-I8KHcS7z.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-Dj7NjDXU.css">
   </head>
-  <body>
+  <body oncopy="return false" oncut="return false" onpaste="return false" ondragstart="return false" ondrop="return false">
     <div id="root"></div>
     <script>
       (function () {

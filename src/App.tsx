@@ -143,16 +143,71 @@ export default function App() {
         return false;
       }
       if (isBlockedCopyPasteShortcut(e)) {
+        try {
+          window.getSelection?.()?.removeAllRanges?.();
+        } catch {
+          // ignore
+        }
         e.preventDefault();
         e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === 'function') {
+          e.stopImmediatePropagation();
+        }
         return false;
       }
       return undefined;
     };
 
     const handleCopyPaste = (e: ClipboardEvent) => {
+      if (e.clipboardData) {
+        try {
+          e.clipboardData.setData('text/plain', '');
+          e.clipboardData.setData('text/html', '');
+          e.clipboardData.clearData();
+        } catch {
+          // ignore
+        }
+      }
+      try {
+        window.getSelection?.()?.removeAllRanges?.();
+      } catch {
+        // ignore
+      }
       e.preventDefault();
       e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === 'function') {
+        e.stopImmediatePropagation();
+      }
+      return false;
+    };
+
+    const handleBeforeInput = (e: Event) => {
+      const inputEv = e as InputEvent;
+      const inputType = String(inputEv.inputType || '');
+      if (
+        inputType === 'insertFromPaste' ||
+        inputType === 'insertFromPasteAsQuotation' ||
+        inputType === 'insertFromDrop' ||
+        inputType === 'insertFromYank' ||
+        inputType === 'deleteByCut' ||
+        inputType === 'deleteByDrag'
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === 'function') {
+          e.stopImmediatePropagation();
+        }
+        return false;
+      }
+      return undefined;
+    };
+
+    const handleDragDrop = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === 'function') {
+        e.stopImmediatePropagation();
+      }
       return false;
     };
 
@@ -169,8 +224,16 @@ export default function App() {
     document.addEventListener('keydown', handleKeyDown, { capture: true });
     window.addEventListener('copy', handleCopyPaste, { capture: true });
     document.addEventListener('copy', handleCopyPaste, { capture: true });
+    window.addEventListener('cut', handleCopyPaste, { capture: true });
+    document.addEventListener('cut', handleCopyPaste, { capture: true });
     window.addEventListener('paste', handleCopyPaste, { capture: true });
     document.addEventListener('paste', handleCopyPaste, { capture: true });
+    window.addEventListener('beforeinput', handleBeforeInput, { capture: true });
+    document.addEventListener('beforeinput', handleBeforeInput, { capture: true });
+    window.addEventListener('dragstart', handleDragDrop, { capture: true });
+    document.addEventListener('dragstart', handleDragDrop, { capture: true });
+    window.addEventListener('drop', handleDragDrop, { capture: true });
+    document.addEventListener('drop', handleDragDrop, { capture: true });
     window.addEventListener('contextmenu', handleContextMenu, { capture: true });
 
     return () => {
@@ -178,8 +241,16 @@ export default function App() {
       document.removeEventListener('keydown', handleKeyDown, { capture: true });
       window.removeEventListener('copy', handleCopyPaste, { capture: true });
       document.removeEventListener('copy', handleCopyPaste, { capture: true });
+      window.removeEventListener('cut', handleCopyPaste, { capture: true });
+      document.removeEventListener('cut', handleCopyPaste, { capture: true });
       window.removeEventListener('paste', handleCopyPaste, { capture: true });
       document.removeEventListener('paste', handleCopyPaste, { capture: true });
+      window.removeEventListener('beforeinput', handleBeforeInput, { capture: true });
+      document.removeEventListener('beforeinput', handleBeforeInput, { capture: true });
+      window.removeEventListener('dragstart', handleDragDrop, { capture: true });
+      document.removeEventListener('dragstart', handleDragDrop, { capture: true });
+      window.removeEventListener('drop', handleDragDrop, { capture: true });
+      document.removeEventListener('drop', handleDragDrop, { capture: true });
       window.removeEventListener('contextmenu', handleContextMenu, { capture: true });
       if (securityAlertTimerRef.current) {
         window.clearTimeout(securityAlertTimerRef.current);

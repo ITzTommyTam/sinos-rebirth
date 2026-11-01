@@ -9,9 +9,79 @@ import {
   TestCaseResult,
 } from '../types/academic';
 
-// Prevent browser native window.print() (macOS/Windows Print Dialog) from ever being triggered by user Python print() code
+// Prevent browser native window.print() (macOS/Windows Print Dialog) and native Clipboard API / execCommand copy-paste
 if (typeof window !== 'undefined') {
   window.print = () => {};
+
+  try {
+    const noopWriteText = async () => {};
+    const noopWrite = async () => {};
+    const noopReadText = async () => '';
+    const noopRead = async () => [];
+
+    if (typeof Clipboard !== 'undefined' && Clipboard.prototype) {
+      Object.defineProperty(Clipboard.prototype, 'writeText', {
+        value: noopWriteText,
+        configurable: true,
+        writable: true,
+      });
+      Object.defineProperty(Clipboard.prototype, 'write', {
+        value: noopWrite,
+        configurable: true,
+        writable: true,
+      });
+      Object.defineProperty(Clipboard.prototype, 'readText', {
+        value: noopReadText,
+        configurable: true,
+        writable: true,
+      });
+      Object.defineProperty(Clipboard.prototype, 'read', {
+        value: noopRead,
+        configurable: true,
+        writable: true,
+      });
+    }
+
+    if (navigator.clipboard) {
+      Object.defineProperty(navigator.clipboard, 'writeText', {
+        value: noopWriteText,
+        configurable: true,
+        writable: true,
+      });
+      Object.defineProperty(navigator.clipboard, 'write', {
+        value: noopWrite,
+        configurable: true,
+        writable: true,
+      });
+      Object.defineProperty(navigator.clipboard, 'readText', {
+        value: noopReadText,
+        configurable: true,
+        writable: true,
+      });
+      Object.defineProperty(navigator.clipboard, 'read', {
+        value: noopRead,
+        configurable: true,
+        writable: true,
+      });
+    }
+  } catch {
+    // ignore if browser restricts Clipboard prototype override
+  }
+
+  try {
+    if (typeof document !== 'undefined' && typeof document.execCommand === 'function') {
+      const originalExecCommand = document.execCommand.bind(document);
+      document.execCommand = (commandId: string, showUI?: boolean, value?: string): boolean => {
+        const lower = String(commandId || '').toLowerCase();
+        if (lower === 'copy' || lower === 'cut' || lower === 'paste' || lower === 'inserttext') {
+          return false;
+        }
+        return originalExecCommand(commandId, showUI, value);
+      };
+    }
+  } catch {
+    // ignore
+  }
 }
 
 /**
@@ -70,23 +140,47 @@ export function isBlockedDevToolsShortcut(e: ShortcutEventLike): boolean {
 }
 
 /**
- * Pure helper that detects whether a keyboard event matches Copy (Ctrl+C / Cmd+C)
- * or Paste (Ctrl+V / Cmd+V) shortcuts so they can be blocked across the application and code editor.
+ * Pure helper that detects whether a keyboard event matches Copy (Ctrl+C / Cmd+C / Ctrl+Insert),
+ * Cut (Ctrl+X / Cmd+X / Shift+Delete), or Paste (Ctrl+V / Cmd+V / Shift+Insert) shortcuts
+ * across macOS (Firefox, Safari, Chrome), Windows, and Linux.
  */
 export function isBlockedCopyPasteShortcut(e: ShortcutEventLike): boolean {
   if (!e) return false;
   const upperKey = (e.key || '').toUpperCase();
   const upperCode = (e.code || '').toUpperCase();
 
+  if (
+    upperKey === 'COPY' ||
+    upperKey === 'PASTE' ||
+    upperKey === 'CUT' ||
+    upperCode === 'COPY' ||
+    upperCode === 'PASTE' ||
+    upperCode === 'CUT'
+  ) {
+    return true;
+  }
+
   if ((e.ctrlKey || e.metaKey) && !e.altKey) {
     if (
       upperKey === 'C' ||
       upperKey === 'V' ||
+      upperKey === 'X' ||
+      upperKey === 'INSERT' ||
       upperCode === 'KEYC' ||
       upperCode === 'KEYV' ||
+      upperCode === 'KEYX' ||
+      upperCode === 'INSERT' ||
       e.keyCode === 67 ||
-      e.keyCode === 86
+      e.keyCode === 86 ||
+      e.keyCode === 88 ||
+      e.keyCode === 45
     ) {
+      return true;
+    }
+  }
+
+  if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (upperKey === 'INSERT' || upperCode === 'INSERT' || e.keyCode === 45) {
       return true;
     }
   }

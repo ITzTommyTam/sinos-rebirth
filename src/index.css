@@ -42,6 +42,18 @@
     text-rendering: optimizeLegibility;
     font-variant-numeric: tabular-nums;
     overflow-x: hidden;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+  }
+
+  *, *::before, *::after {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
   }
 
   button, a, input, select, textarea {

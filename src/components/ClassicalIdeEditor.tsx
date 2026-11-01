@@ -56,6 +56,9 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
   const monacoInstanceRef = useRef<any>(null);
   const runCallbackRef = useRef(onRunAndGrade);
   runCallbackRef.current = onRunAndGrade;
+  const lastTrustedCodeRef = useRef<string>(code);
+  lastTrustedCodeRef.current = code;
+  const pasteBlockedUntilRef = useRef<number>(0);
 
   const [cursorOffset, setCursorOffset] = useState<number>(code.length);
   const [isCompactViewport, setIsCompactViewport] = useState<boolean>(() =>
@@ -118,28 +121,75 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
     monacoEditorRef.current = editor;
     monacoInstanceRef.current = monaco;
 
+    const collapseEditorSelection = () => {
+      const pos = editor.getPosition();
+      if (pos) {
+        editor.setSelection(
+          new monaco.Selection(pos.lineNumber, pos.column, pos.lineNumber, pos.column)
+        );
+      }
+    };
+
+    const markPasteAttemptBlocked = () => {
+      pasteBlockedUntilRef.current = Date.now() + 250;
+      collapseEditorSelection();
+    };
+
     // Bind Ctrl + Enter / Cmd + Enter to Run & Grade inside VS Code editor
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
       runCallbackRef.current();
     });
 
-    // Block Ctrl + C / Cmd + C and Ctrl + V / Cmd + V inside Monaco Editor
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyC, () => {});
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyV, () => {});
-    editor.addCommand(
+    // Block all Copy, Cut, Paste combinations on macOS (Cmd & Ctrl) and Windows/Linux
+    const blockedKeybindings = [
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyC,
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyV,
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyX,
+      monaco.KeyMod.WinCtrl | monaco.KeyCode.KeyC,
+      monaco.KeyMod.WinCtrl | monaco.KeyCode.KeyV,
+      monaco.KeyMod.WinCtrl | monaco.KeyCode.KeyX,
+      monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyC,
       monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyV,
-      () => {}
-    );
+      monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyX,
+      monaco.KeyMod.WinCtrl | monaco.KeyMod.Shift | monaco.KeyCode.KeyC,
+      monaco.KeyMod.WinCtrl | monaco.KeyMod.Shift | monaco.KeyCode.KeyV,
+      monaco.KeyMod.WinCtrl | monaco.KeyMod.Shift | monaco.KeyCode.KeyX,
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.Insert,
+      monaco.KeyMod.WinCtrl | monaco.KeyCode.Insert,
+      monaco.KeyMod.Shift | monaco.KeyCode.Insert,
+    ];
+    blockedKeybindings.forEach((kb) => {
+      editor.addCommand(kb, () => {
+        markPasteAttemptBlocked();
+      });
+    });
 
-    // Make Tab key strictly indent/outdent and block Copy/Paste keydowns inside Monaco
+    // Make Tab key strictly indent/outdent and block Copy/Cut/Paste keydowns inside Monaco
     editor.onKeyDown((e) => {
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        !e.altKey &&
-        (e.keyCode === monaco.KeyCode.KeyC || e.keyCode === monaco.KeyCode.KeyV)
-      ) {
+      const upperBrowserKey = (e.browserEvent?.key || '').toUpperCase();
+      const upperBrowserCode = (e.browserEvent?.code || '').toUpperCase();
+      const isCopyCutPasteKey =
+        e.keyCode === monaco.KeyCode.KeyC ||
+        e.keyCode === monaco.KeyCode.KeyV ||
+        e.keyCode === monaco.KeyCode.KeyX ||
+        e.keyCode === monaco.KeyCode.Insert ||
+        upperBrowserKey === 'C' ||
+        upperBrowserKey === 'V' ||
+        upperBrowserKey === 'X' ||
+        upperBrowserKey === 'INSERT' ||
+        upperBrowserCode === 'KEYC' ||
+        upperBrowserCode === 'KEYV' ||
+        upperBrowserCode === 'KEYX' ||
+        upperBrowserCode === 'INSERT';
+
+      if (((e.ctrlKey || e.metaKey) && !e.altKey && isCopyCutPasteKey) || (e.shiftKey && e.keyCode === monaco.KeyCode.Insert)) {
+        markPasteAttemptBlocked();
         e.preventDefault();
         e.stopPropagation();
+        if (e.browserEvent) {
+          e.browserEvent.preventDefault();
+          e.browserEvent.stopPropagation();
+        }
         return;
       }
       if (e.keyCode === monaco.KeyCode.Tab && !e.ctrlKey && !e.altKey && !e.metaKey) {
@@ -150,24 +200,59 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
       }
     });
 
+    const blockClipboardDomEvent = (ev: Event) => {
+      markPasteAttemptBlocked();
+      const clipEv = ev as ClipboardEvent;
+      if (clipEv.clipboardData) {
+        try {
+          clipEv.clipboardData.setData('text/plain', '');
+          clipEv.clipboardData.setData('text/html', '');
+          clipEv.clipboardData.clearData();
+        } catch {
+          // ignore
+        }
+      }
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (typeof ev.stopImmediatePropagation === 'function') {
+        ev.stopImmediatePropagation();
+      }
+    };
+
+    const blockBeforeInputDomEvent = (ev: Event) => {
+      const inputEv = ev as InputEvent;
+      const inputType = String(inputEv.inputType || '');
+      if (
+        inputType === 'insertFromPaste' ||
+        inputType === 'insertFromPasteAsQuotation' ||
+        inputType === 'insertFromDrop' ||
+        inputType === 'insertFromYank' ||
+        inputType === 'deleteByCut' ||
+        inputType === 'deleteByDrag'
+      ) {
+        markPasteAttemptBlocked();
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (typeof ev.stopImmediatePropagation === 'function') {
+          ev.stopImmediatePropagation();
+        }
+      }
+    };
+
     const domNode = editor.getDomNode();
     if (domNode) {
-      domNode.addEventListener(
-        'copy',
-        (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-        },
-        { capture: true }
-      );
-      domNode.addEventListener(
-        'paste',
-        (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-        },
-        { capture: true }
-      );
+      (['copy', 'cut', 'paste', 'drop', 'dragstart'] as const).forEach((evtName) => {
+        domNode.addEventListener(evtName, blockClipboardDomEvent, { capture: true });
+      });
+      domNode.addEventListener('beforeinput', blockBeforeInputDomEvent, { capture: true });
+
+      const internalInputs = domNode.querySelectorAll('textarea, .inputarea, .native-edit-context');
+      internalInputs.forEach((el) => {
+        (['copy', 'cut', 'paste', 'drop', 'dragstart'] as const).forEach((evtName) => {
+          el.addEventListener(evtName, blockClipboardDomEvent, { capture: true });
+        });
+        el.addEventListener('beforeinput', blockBeforeInputDomEvent, { capture: true });
+      });
     }
 
     // Update cursor offset for the live statement output bar
@@ -222,10 +307,36 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
   return (
     <div
       onCopy={(e) => {
+        if (e.clipboardData) {
+          try {
+            e.clipboardData.setData('text/plain', '');
+            e.clipboardData.setData('text/html', '');
+          } catch {
+            // ignore
+          }
+        }
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onCut={(e) => {
+        if (e.clipboardData) {
+          try {
+            e.clipboardData.setData('text/plain', '');
+            e.clipboardData.setData('text/html', '');
+          } catch {
+            // ignore
+          }
+        }
         e.preventDefault();
         e.stopPropagation();
       }}
       onPaste={(e) => {
+        pasteBlockedUntilRef.current = Date.now() + 250;
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onDrop={(e) => {
+        pasteBlockedUntilRef.current = Date.now() + 250;
         e.preventDefault();
         e.stopPropagation();
       }}
@@ -253,6 +364,8 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
             type="button"
             onClick={() => {
               const resetVal = getDefaultEditorCode(problem);
+              pasteBlockedUntilRef.current = 0;
+              lastTrustedCodeRef.current = resetVal;
               onResetStarter();
               setCursorOffset(resetVal.length);
               if (monacoEditorRef.current) {
@@ -289,6 +402,16 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
           onMount={handleEditorDidMount}
           onChange={(val) => {
             const raw = val ?? '';
+            if (Date.now() < pasteBlockedUntilRef.current) {
+              const safePrev = lastTrustedCodeRef.current;
+              if (monacoEditorRef.current) {
+                const model = monacoEditorRef.current.getModel();
+                if (model && model.getValue() !== safePrev) {
+                  model.setValue(safePrev);
+                }
+              }
+              return;
+            }
             const next =
               problem.language === 'sql' ? autoUppercaseSql(raw) : raw;
             if (
@@ -308,6 +431,7 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
                 editor.setScrollTop(scrollTop);
               }
             }
+            lastTrustedCodeRef.current = next;
             onChangeCode(next);
           }}
           options={{
@@ -320,6 +444,11 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
             cursorSmoothCaretAnimation: 'on',
             smoothScrolling: true,
             contextmenu: false,
+            copyWithSyntaxHighlighting: false,
+            emptySelectionClipboard: false,
+            selectionClipboard: false,
+            editContext: false,
+            dropIntoEditor: { enabled: false },
             minimap: { enabled: !isCompactViewport },
             folding: !isCompactViewport,
             lineNumbersMinChars: isCompactViewport ? 3 : 4,
@@ -368,17 +497,42 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
           aria-label={`Trình soạn thảo mã ${LANGUAGE_LABELS[problem.language]}`}
           value={code}
           onCopy={(e) => {
+            if (e.clipboardData) {
+              try {
+                e.clipboardData.setData('text/plain', '');
+                e.clipboardData.setData('text/html', '');
+              } catch {
+                // ignore
+              }
+            }
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onCut={(e) => {
+            if (e.clipboardData) {
+              try {
+                e.clipboardData.setData('text/plain', '');
+                e.clipboardData.setData('text/html', '');
+              } catch {
+                // ignore
+              }
+            }
             e.preventDefault();
             e.stopPropagation();
           }}
           onPaste={(e) => {
+            pasteBlockedUntilRef.current = Date.now() + 250;
             e.preventDefault();
             e.stopPropagation();
           }}
           onChange={(e) => {
+            if (Date.now() < pasteBlockedUntilRef.current) {
+              return;
+            }
             const raw = e.target.value;
             const next =
               problem.language === 'sql' ? autoUppercaseSql(raw) : raw;
+            lastTrustedCodeRef.current = next;
             onChangeCode(next);
             setCursorOffset(e.target.selectionStart ?? next.length);
             if (

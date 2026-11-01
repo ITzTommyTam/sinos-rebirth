@@ -249,19 +249,30 @@ test('Security: isBlockedDevToolsShortcut blocks F12 and DevTools/View-Source sh
   assert.equal(isBlockedDevToolsShortcut({ key: 'a', code: 'KeyA' }), false);
 });
 
-test('Security: isBlockedCopyPasteShortcut blocks Ctrl+C, Ctrl+V, Cmd+C, and Cmd+V while allowing normal typing and Ctrl+Enter', () => {
+test('Security: isBlockedCopyPasteShortcut blocks Ctrl+C, Ctrl+V, Cmd+C, Cmd+V, Cmd+X, Ctrl+X, and Shift+Insert while allowing normal typing and Ctrl+Enter', () => {
   assert.equal(isBlockedCopyPasteShortcut({ key: 'c', ctrlKey: true }), true);
   assert.equal(isBlockedCopyPasteShortcut({ key: 'C', ctrlKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'c', metaKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'x', metaKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'x', ctrlKey: true }), true);
   assert.equal(isBlockedCopyPasteShortcut({ key: 'v', ctrlKey: true }), true);
   assert.equal(isBlockedCopyPasteShortcut({ key: 'V', ctrlKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'v', metaKey: true }), true);
   assert.equal(isBlockedCopyPasteShortcut({ code: 'KeyC', ctrlKey: true }), true);
   assert.equal(isBlockedCopyPasteShortcut({ code: 'KeyV', metaKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ code: 'KeyX', metaKey: true }), true);
   assert.equal(isBlockedCopyPasteShortcut({ keyCode: 67, ctrlKey: true }), true);
   assert.equal(isBlockedCopyPasteShortcut({ keyCode: 86, metaKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ keyCode: 88, metaKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'Insert', shiftKey: true }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'Copy' }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'Paste' }), true);
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'Cut' }), true);
 
-  // Normal typing 'c', 'v' or running Ctrl+Enter must remain allowed
+  // Normal typing 'c', 'v', 'x' or running Ctrl+Enter must remain allowed
   assert.equal(isBlockedCopyPasteShortcut({ key: 'c', ctrlKey: false }), false);
   assert.equal(isBlockedCopyPasteShortcut({ key: 'v', ctrlKey: false }), false);
+  assert.equal(isBlockedCopyPasteShortcut({ key: 'x', ctrlKey: false }), false);
   assert.equal(isBlockedCopyPasteShortcut({ key: 'Enter', ctrlKey: true }), false);
 });
 
