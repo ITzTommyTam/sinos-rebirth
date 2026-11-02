@@ -561,7 +561,16 @@ export const ClassicalIdeEditor: React.FC<ClassicalIdeEditorProps> = ({
         </div>
         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
           <span className="text-zinc-400 shrink-0">Dòng Output:</span>
-          <span className="font-bold text-emerald-400 break-words">
+          <span
+            className={`font-bold break-words ${
+              liveCommandInfo.liveOutput.startsWith('[Lỗi')
+                ? 'text-red-400'
+                : liveCommandInfo.liveOutput.startsWith('(Chưa có') ||
+                  liveCommandInfo.liveOutput.startsWith('Chờ nhập')
+                ? 'text-zinc-400'
+                : 'text-emerald-400'
+            }`}
+          >
             {liveCommandInfo.liveOutput}
           </span>
         </div>

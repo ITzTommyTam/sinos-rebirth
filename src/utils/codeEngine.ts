@@ -418,28 +418,98 @@ export function analyzeSyntax(code: string, language: Language): SyntaxDiagnosti
   if (language === 'python') {
     let openParens = 0;
     let openBrackets = 0;
-    let expectIndentNext = false;
+    let openBraces = 0;
+    let pendingBlockHeader: { line: number; indent: number; keyword: string } | null = null;
+    const validBlockIndentLevels = new Set<number>([0]);
+    const activeIfWrapperIndents = new Set<number>();
+
+    const PYTHON_KEYWORDS = new Set([
+      'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue',
+      'def', 'del', 'elif', 'else', 'except', 'finally', 'for', 'from',
+      'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal', 'not',
+      'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield',
+    ]);
+
+    const stripCommentOutsideQuotes = (raw: string): { clean: string; unclosedQuote: boolean } => {
+      let out = '';
+      let inS = false;
+      let inD = false;
+      for (let i = 0; i < raw.length; i++) {
+        const ch = raw[i];
+        if (ch === '\\' && (inS || inD)) {
+          out += ch + (raw[i + 1] || '');
+          i++;
+          continue;
+        }
+        if (ch === "'" && !inD) inS = !inS;
+        else if (ch === '"' && !inS) inD = !inD;
+        else if (ch === '#' && !inS && !inD) break;
+        out += ch;
+      }
+      return { clean: out.trimEnd(), unclosedQuote: inS || inD };
+    };
+
+    const findTopLevelChar = (expr: string, target: string): number => {
+      let pDepth = 0;
+      let bDepth = 0;
+      let cDepth = 0;
+      let inS = false;
+      let inD = false;
+      for (let i = 0; i < expr.length; i++) {
+        const ch = expr[i];
+        if (ch === '\\' && (inS || inD)) {
+          i++;
+          continue;
+        }
+        if (ch === "'" && !inD) inS = !inS;
+        else if (ch === '"' && !inS) inD = !inD;
+        else if (!inS && !inD) {
+          if (ch === '(') pDepth++;
+          else if (ch === ')') pDepth = Math.max(0, pDepth - 1);
+          else if (ch === '[') bDepth++;
+          else if (ch === ']') bDepth = Math.max(0, bDepth - 1);
+          else if (ch === '{') cDepth++;
+          else if (ch === '}') cDepth = Math.max(0, cDepth - 1);
+          else if (ch === target && pDepth === 0 && bDepth === 0 && cDepth === 0) {
+            return i;
+          }
+        }
+      }
+      return -1;
+    };
 
     lines.forEach((rawLine, idx) => {
       const lineNum = idx + 1;
-      const commentIdx = rawLine.indexOf('#');
-      const cleanLine = (commentIdx >= 0 ? rawLine.slice(0, commentIdx) : rawLine).trimEnd();
+      const { clean: cleanLine, unclosedQuote } = stripCommentOutsideQuotes(rawLine);
       const trimmed = cleanLine.trim();
 
       if (!trimmed) return;
 
       const indent = cleanLine.length - cleanLine.trimStart().length;
+      const atTopLevelParens = openParens === 0 && openBrackets === 0 && openBraces === 0;
 
-      if (expectIndentNext && indent === 0) {
+      if (pendingBlockHeader && atTopLevelParens) {
+        if (indent <= pendingBlockHeader.indent) {
+          diagnostics.push({
+            line: lineNum,
+            column: 1,
+            severity: 'error',
+            message: `IndentationError: expected an indented block — Thiếu thụt lề (4 dấu cách) bên dưới câu lệnh '${pendingBlockHeader.keyword}:' (dòng ${pendingBlockHeader.line}).`,
+            suggestion: 'Thụt lề khối lệnh bên dưới vào 4 khoảng trắng.',
+          });
+        } else {
+          validBlockIndentLevels.add(indent);
+        }
+        pendingBlockHeader = null;
+      } else if (atTopLevelParens && !validBlockIndentLevels.has(indent)) {
         diagnostics.push({
           line: lineNum,
           column: 1,
           severity: 'error',
-          message: 'IndentationError: Thiếu thụt lề (4 dấu cách) sau câu lệnh kết thúc bằng dấu hai chấm (:).',
-          suggestion: 'Thụt lề dòng này vào 4 khoảng trắng.',
+          message: 'IndentationError: unexpected indent — Mức thụt lề đầu dòng không khớp với cấu trúc khối lệnh.',
+          suggestion: 'Kiểm tra lại số dấu cách đầu dòng (chuẩn 4 spaces mỗi cấp).',
         });
       }
-      expectIndentNext = false;
 
       if (rawLine.includes('\t')) {
         diagnostics.push({
@@ -451,29 +521,278 @@ export function analyzeSyntax(code: string, language: Language): SyntaxDiagnosti
         });
       }
 
-      // Check block statements missing ':'
-      const blockMatch = trimmed.match(/^(def\s+\w+\(.*\)|if\s+.+|elif\s+.+|else|for\s+.+\s+in\s+.+|while\s+.+)$/);
-      if (blockMatch && !trimmed.endsWith(':') && !trimmed.includes(':')) {
+      if (unclosedQuote) {
         diagnostics.push({
           line: lineNum,
           column: cleanLine.length,
           severity: 'error',
-          message: `SyntaxError: Thiếu dấu hai chấm ':' ở cuối câu lệnh cấu trúc '${trimmed.split(/\s+/)[0]}'.`,
-          suggestion: `Thêm dấu ':' vào cuối dòng ${lineNum}.`,
+          message: 'SyntaxError: EOL while scanning string literal — Chuỗi ký tự chưa được đóng dấu nháy trên dòng này.',
+          suggestion: 'Thêm dấu nháy đóng chuỗi (\' hoặc ").',
         });
       }
 
-      // Check assignment '=' inside 'if' condition (not '==', '!=', '<=', '>=')
-      if (/^(if|elif|while)\s+/.test(trimmed)) {
-        const conditionPart = trimmed.replace(/^(if|elif|while)\s+/, '').split(':')[0];
-        if (/(?<![=!<>])=(?!=)/.test(conditionPart)) {
+      // Replace string literals with a safe token for operator/token inspection
+      const maskedStrings = trimmed.replace(
+        /(?:[frbuFRBU]{1,2})?(?:"""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g,
+        '"__STR__"'
+      );
+
+      // Check C/C++/JS operators invalid in Python 3
+      if (/&&|\|\|/.test(maskedStrings)) {
+        diagnostics.push({
+          line: lineNum,
+          column: 1,
+          severity: 'error',
+          message: "SyntaxError: invalid syntax — Python 3 không dùng '&&' hoặc '||'. Hãy dùng từ khóa 'and' hoặc 'or'.",
+          suggestion: "Đổi '&&' thành 'and', '||' thành 'or'.",
+        });
+      }
+      if (/(?:[a-zA-Z0-9_)\]]\s*(?:\+\+|--)|(?:\+\+|--)\s*[a-zA-Z_])/.test(maskedStrings)) {
+        diagnostics.push({
+          line: lineNum,
+          column: 1,
+          severity: 'error',
+          message: "SyntaxError: invalid syntax — Python 3 không hỗ trợ toán tử '++' hoặc '--'.",
+          suggestion: "Sử dụng '+= 1' hoặc '-= 1'.",
+        });
+      }
+      if (/===|!==|<>|=>|=<.test/.test(maskedStrings) || /(?:===|!==|<>|=>|=<)/.test(maskedStrings)) {
+        diagnostics.push({
+          line: lineNum,
+          column: 1,
+          severity: 'error',
+          message: "SyntaxError: invalid syntax — Toán tử so sánh không hợp lệ trong Python 3 (dùng '==', '!=', '>=', '<=').",
+          suggestion: "Kiểm tra lại thứ tự ký tự toán tử so sánh ('>=' hoặc '<=').",
+        });
+      }
+
+      // Check 'else if' instead of 'elif'
+      if (/^else\s+if\b/.test(trimmed)) {
+        diagnostics.push({
+          line: lineNum,
+          column: 1,
+          severity: 'error',
+          message: "SyntaxError: invalid syntax — Trong Python 3 phải dùng từ khóa 'elif' thay vì 'else if'.",
+          suggestion: "Đổi 'else if' thành 'elif'.",
+        });
+      }
+
+      // Check block statements (if, elif, else, for, while, def)
+      const headerKwMatch = trimmed.match(/^(if|elif|else|for|while|def)\b(.*)$/);
+      if (headerKwMatch) {
+        const kw = headerKwMatch[1];
+        const restAfterKw = headerKwMatch[2];
+        const colonIdx = findTopLevelChar(trimmed, ':');
+
+        if (kw === 'if' || kw === 'for' || kw === 'while') {
+          activeIfWrapperIndents.add(indent);
+        } else if (kw === 'elif' || kw === 'else') {
+          if (!activeIfWrapperIndents.has(indent)) {
+            diagnostics.push({
+              line: lineNum,
+              column: 1,
+              severity: 'error',
+              message: `SyntaxError: invalid syntax — Câu lệnh '${kw}' không có khối 'if' tương ứng cùng cấp thụt lề phía trước.`,
+              suggestion: `Kiểm tra lại câu lệnh 'if' phía trên hoặc mức thụt lề của '${kw}'.`,
+            });
+          }
+        }
+
+        if (colonIdx === -1) {
           diagnostics.push({
             line: lineNum,
-            column: rawLine.indexOf('=') + 1,
+            column: cleanLine.length,
             severity: 'error',
-            message: 'SyntaxError: Sử dụng phép gán "=" thay vì phép so sánh bằng "==" trong biểu thức điều kiện.',
-            suggestion: 'Đổi "=" thành "==" để so sánh giá trị.',
+            message: `SyntaxError: invalid syntax — Thiếu dấu hai chấm ':' ở cuối câu lệnh cấu trúc '${kw}'.`,
+            suggestion: `Thêm dấu ':' vào cuối câu lệnh '${kw}' tại dòng ${lineNum}.`,
           });
+        }
+
+        const headerBeforeColon = (colonIdx >= 0 ? trimmed.slice(0, colonIdx) : trimmed).trim();
+        const afterColonSuite = colonIdx >= 0 ? trimmed.slice(colonIdx + 1).trim() : '';
+
+        if (kw === 'else' && headerBeforeColon !== 'else') {
+          diagnostics.push({
+            line: lineNum,
+            column: 1,
+            severity: 'error',
+            message: "SyntaxError: invalid syntax — Từ khóa 'else:' trong Python 3 không được phép đi kèm điều kiện.",
+            suggestion: "Đổi thành 'elif <điều_kiện>:' hoặc xóa điều kiện sau 'else:'.",
+          });
+        }
+
+        if (kw === 'for' && !/^for\s+[a-zA-Z_]\w*(?:\s*,\s*[a-zA-Z_]\w*)*\s+in\s+.+/.test(headerBeforeColon)) {
+          diagnostics.push({
+            line: lineNum,
+            column: 1,
+            severity: 'error',
+            message: "SyntaxError: invalid syntax — Vòng lặp 'for' trong Python 3 phải có dạng 'for <biến> in <dãy>:'.",
+            suggestion: 'Ví dụ: for i in range(n):',
+          });
+        }
+
+        if (kw === 'def' && !/^def\s+[a-zA-Z_]\w*\s*\([^)]*\)$/.test(headerBeforeColon)) {
+          diagnostics.push({
+            line: lineNum,
+            column: 1,
+            severity: 'error',
+            message: "SyntaxError: invalid syntax — Khai báo hàm trong Python 3 phải có dạng 'def ten_ham(tham_so):'.",
+            suggestion: 'Ví dụ: def tinh_tong(a, b):',
+          });
+        }
+
+        if (kw === 'if' || kw === 'elif' || kw === 'while') {
+          const conditionPart = (
+            colonIdx >= 0 ? trimmed.slice(kw.length, colonIdx) : restAfterKw
+          ).trim();
+
+          if (!conditionPart) {
+            diagnostics.push({
+              line: lineNum,
+              column: 1,
+              severity: 'error',
+              message: `SyntaxError: invalid syntax — Thiếu biểu thức điều kiện sau từ khóa '${kw}'.`,
+              suggestion: `Nhập điều kiện kiểm tra trước dấu ':', ví dụ: ${kw} a > 0:`,
+            });
+          } else {
+            // 1. Disallow top-level comma ',' inside if/elif/while condition (e.g. `if a,b,c >=1 and a,b,c <= 10**6:`)
+            const topCommaIdx = findTopLevelChar(conditionPart, ',');
+            if (topCommaIdx >= 0) {
+              diagnostics.push({
+                line: lineNum,
+                column: rawLine.indexOf(',') + 1,
+                severity: 'error',
+                message: `SyntaxError: invalid syntax — Không được dùng dấu phẩy ',' để gộp nhiều biến trong điều kiện '${kw}' (Python 3 báo lỗi SyntaxError như khi chạy python3 trên máy).`,
+                suggestion:
+                  "Đề xuất sửa thành: if (a and b and c) >= 1 and (a and b and c) <= 10**6: (hoặc if a >= 1 and b >= 1 and c >= 1:)",
+              });
+            }
+
+            // 2. Disallow parenthesized comma-grouped comparisons like `if (a, b, c) >= 1:` or `if (a, b, c >= 1):`
+            if (
+              /(?<![a-zA-Z0-9_])\([^()]*,[^()]*\)\s*(?:<=|>=|<|>)/.test(conditionPart) ||
+              /(?:<=|>=|<|>)\s*(?<![a-zA-Z0-9_])\([^()]*,[^()]*\)/.test(conditionPart) ||
+              /(?<![a-zA-Z0-9_])\([^()]*,[^()]*(?:<=|>=|==|!=|<|>)[^()]*\)/.test(conditionPart)
+            ) {
+              diagnostics.push({
+                line: lineNum,
+                column: rawLine.indexOf(',') + 1,
+                severity: 'error',
+                message: `TypeError / SyntaxError: Trong Python 3, để '${conditionPart}' cũng bị lỗi vì không thể so sánh tuple '(a, b, c)' với số.`,
+                suggestion:
+                  "Đề xuất sửa thành: if (a and b and c) >= 1: (hoặc if a >= 1 and b >= 1 and c >= 1:)",
+              });
+            }
+
+            // 3. Check assignment '=' inside condition (not '==', '!=', '<=', '>=')
+            const maskedCond = conditionPart.replace(
+              /(?:[frbuFRBU]{1,2})?(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g,
+              '""'
+            );
+            if (/(?<![=!<>])=(?!=)/.test(maskedCond)) {
+              diagnostics.push({
+                line: lineNum,
+                column: rawLine.indexOf('=') + 1,
+                severity: 'error',
+                message: 'SyntaxError: invalid syntax — Sử dụng phép gán "=" thay vì phép so sánh bằng "==" trong biểu thức điều kiện.',
+                suggestion: 'Đổi "=" thành "==" để so sánh giá trị.',
+              });
+            }
+
+            // 4. Trailing operator at the end of condition
+            if (/(?:\+|\-|\*|\/|%|==|!=|<=|>=|<|>|\band|\bor|\bnot|\bin|\bis)\s*$/.test(maskedCond)) {
+              diagnostics.push({
+                line: lineNum,
+                column: cleanLine.length,
+                severity: 'error',
+                message: `SyntaxError: invalid syntax — Biểu thức điều kiện '${kw}' bị bỏ dở hoặc thiếu toán hạng phía sau toán tử.`,
+                suggestion: 'Hoàn thiện vế phải của phép toán trong điều kiện.',
+              });
+            }
+          }
+        }
+
+        if (colonIdx >= 0 && !afterColonSuite) {
+          pendingBlockHeader = { line: lineNum, indent, keyword: kw };
+        }
+      } else {
+        // Non-header statement checks
+        // Check comma-grouped variables before comparison operator anywhere (e.g., `a, b, c >= 1`)
+        if (/\b[a-zA-Z_]\w*(?:\s*,\s*[a-zA-Z_]\w*)+\s*(?:<=|>=|==|!=|<|>)/.test(maskedStrings)) {
+          diagnostics.push({
+            line: lineNum,
+            column: rawLine.indexOf(',') + 1,
+            severity: 'error',
+            message: "SyntaxError: invalid syntax — Không được dùng dấu phẩy ',' để so sánh gộp nhiều biến cùng lúc trong Python 3.",
+            suggestion: "Đề xuất sửa thành: (a and b and c) >= 1 hoặc tách riêng từng biến bằng 'and'.",
+          });
+        }
+
+        // Check invalid assignment target on LHS of '='
+        const eqIdx = findTopLevelChar(maskedStrings, '=');
+        if (
+          eqIdx > 0 &&
+          !['=', '!', '<', '>', '+', '-', '*', '/', '%'].includes(maskedStrings[eqIdx - 1]) &&
+          maskedStrings[eqIdx + 1] !== '='
+        ) {
+          const lhs = trimmed.slice(0, eqIdx).trim();
+          const rhs = trimmed.slice(eqIdx + 1).trim();
+          const lhsParts = lhs.split(',').map((p) => p.trim());
+          const allValidTargets = lhsParts.every((p) =>
+            /^[a-zA-Z_]\w*(?:\s*\[[^\]]+\]|\s*\.[a-zA-Z_]\w*)*$/.test(p) &&
+            !PYTHON_KEYWORDS.has(p)
+          );
+          if (!allValidTargets) {
+            diagnostics.push({
+              line: lineNum,
+              column: 1,
+              severity: 'error',
+              message: `SyntaxError: cannot assign to expression — Vế trái '${lhs}' không phải là tên biến hợp lệ để gán giá trị.`,
+              suggestion: 'Đặt tên biến hợp lệ ở bên trái dấu "=".',
+            });
+          }
+          if (!rhs) {
+            diagnostics.push({
+              line: lineNum,
+              column: cleanLine.length,
+              severity: 'error',
+              message: 'SyntaxError: invalid syntax — Thiếu giá trị/biểu thức ở vế phải sau dấu "=".',
+              suggestion: 'Nhập giá trị hoặc biểu thức cần gán sau dấu "=".',
+            });
+          }
+        }
+      }
+
+      // Check invalid identifier starting with digits (e.g., `1abc = 5` or `if 2x > 0:`)
+      const withoutValidNumbers = maskedStrings
+        .replace(/\b0[xXbBoO][0-9a-fA-F_]+\b/g, '0')
+        .replace(/\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/g, '0');
+      if (/\b\d+[a-zA-Z_]\w*\b/.test(withoutValidNumbers)) {
+        diagnostics.push({
+          line: lineNum,
+          column: 1,
+          severity: 'error',
+          message: 'SyntaxError: invalid decimal literal — Tên biến hoặc từ khóa trong Python 3 không được bắt đầu bằng chữ số.',
+          suggestion: 'Đặt tên biến bắt đầu bằng chữ cái (a-z, A-Z) hoặc dấu gạch dưới (_).',
+        });
+      }
+
+      // Check two adjacent identifiers/numbers separated only by space with no operator (e.g. `a b = 5`, `x y`)
+      const tokenCheckStr = maskedStrings.replace(/"__STR__"/g, '0');
+      const adjRegex = /\b([a-zA-Z_]\w*|\d+)\s+([a-zA-Z_]\w*|\d+)\b/g;
+      let adjMatch: RegExpExecArray | null;
+      while ((adjMatch = adjRegex.exec(tokenCheckStr)) !== null) {
+        const t1 = adjMatch[1];
+        const t2 = adjMatch[2];
+        if (!PYTHON_KEYWORDS.has(t1) && !PYTHON_KEYWORDS.has(t2)) {
+          diagnostics.push({
+            line: lineNum,
+            column: adjMatch.index + 1,
+            severity: 'error',
+            message: `SyntaxError: invalid syntax — Cú pháp không hợp lệ giữa '${t1}' và '${t2}' (thiếu toán tử hoặc dấu câu hợp lệ).`,
+            suggestion: 'Kiểm tra lại câu lệnh, toán tử hoặc dấu ngoặc đơn.',
+          });
+          break;
         }
       }
 
@@ -484,7 +803,7 @@ export function analyzeSyntax(code: string, language: Language): SyntaxDiagnosti
           line: lineNum,
           column: 1,
           severity: 'error',
-          message: 'SyntaxError: Trong Python 3, hàm print() bắt buộc phải có dấu ngoặc tròn.',
+          message: 'SyntaxError: Missing parentheses in call to \'print\' — Trong Python 3, hàm print() bắt buộc phải có dấu ngoặc tròn.',
           suggestion: `Sửa thành print(${argHint})`,
         });
       }
@@ -509,15 +828,15 @@ export function analyzeSyntax(code: string, language: Language): SyntaxDiagnosti
         });
       }
 
-      if (trimmed.endsWith(':') && indent === 0) {
-        expectIndentNext = true;
-      }
-
-      // Count parens and brackets outside strings
+      // Count parens, brackets, and braces outside strings
       let inSingle = false;
       let inDouble = false;
       for (let i = 0; i < cleanLine.length; i++) {
         const ch = cleanLine[i];
+        if (ch === '\\' && (inSingle || inDouble)) {
+          i++;
+          continue;
+        }
         if (ch === "'" && !inDouble) inSingle = !inSingle;
         else if (ch === '"' && !inSingle) inDouble = !inDouble;
         else if (!inSingle && !inDouble) {
@@ -525,25 +844,29 @@ export function analyzeSyntax(code: string, language: Language): SyntaxDiagnosti
           else if (ch === ')') openParens--;
           else if (ch === '[') openBrackets++;
           else if (ch === ']') openBrackets--;
+          else if (ch === '{') openBraces++;
+          else if (ch === '}') openBraces--;
         }
       }
-      if (inSingle || inDouble) {
-        diagnostics.push({
-          line: lineNum,
-          column: cleanLine.length,
-          severity: 'error',
-          message: 'SyntaxError: Chuỗi ký tự chưa được đóng dấu nháy trên dòng này.',
-          suggestion: 'Thêm dấu nháy đóng chuỗi (\' hoặc ").',
-        });
-      }
     });
+
+    if (pendingBlockHeader !== null) {
+      const hdr = pendingBlockHeader as { line: number; indent: number; keyword: string };
+      diagnostics.push({
+        line: hdr.line,
+        column: 1,
+        severity: 'error',
+        message: `IndentationError: expected an indented block — Câu lệnh '${hdr.keyword}:' tại dòng ${hdr.line} thiếu khối lệnh thụt lề bên dưới.`,
+        suggestion: `Thêm câu lệnh thụt lề (4 dấu cách) bên dưới '${hdr.keyword}:'.`,
+      });
+    }
 
     if (openParens !== 0) {
       diagnostics.push({
         line: lines.length,
         column: 1,
         severity: 'error',
-        message: 'SyntaxError: Số lượng dấu ngoặc tròn "(" và ")" không cân bằng.',
+        message: 'SyntaxError: unmatched parentheses — Số lượng dấu ngoặc tròn "(" và ")" không cân bằng.',
         suggestion: 'Kiểm tra lại các lời gọi hàm print(), int(), range().',
       });
     }
@@ -552,8 +875,17 @@ export function analyzeSyntax(code: string, language: Language): SyntaxDiagnosti
         line: lines.length,
         column: 1,
         severity: 'error',
-        message: 'SyntaxError: Số lượng dấu ngoặc vuông "[" và "]" không cân bằng.',
+        message: 'SyntaxError: unmatched brackets — Số lượng dấu ngoặc vuông "[" và "]" không cân bằng.',
         suggestion: 'Kiểm tra lại cú pháp truy cập chỉ số danh sách (list).',
+      });
+    }
+    if (openBraces !== 0) {
+      diagnostics.push({
+        line: lines.length,
+        column: 1,
+        severity: 'error',
+        message: 'SyntaxError: unmatched braces — Số lượng dấu ngoặc nhọn "{" và "}" không cân bằng.',
+        suggestion: 'Kiểm tra lại cú pháp từ điển (dict) hoặc chuỗi f-string.',
       });
     }
   } else if (language === 'html') {
@@ -698,6 +1030,20 @@ export function analyzeSyntax(code: string, language: Language): SyntaxDiagnosti
  * comprehensions, string methods, input(), and print().
  */
 export function runPythonCode(code: string, rawInput: string): { stdout: string; error?: string } {
+  if (!code.trim()) {
+    return { stdout: '' };
+  }
+
+  // Gate execution on Python 3 syntax analysis so invalid statements never consume input or produce output
+  const syntaxDiagnostics = analyzeSyntax(code, 'python');
+  const firstSyntaxError = syntaxDiagnostics.find((d) => d.severity === 'error');
+  if (firstSyntaxError) {
+    return {
+      stdout: '',
+      error: `Line ${firstSyntaxError.line}: ${firstSyntaxError.message}`,
+    };
+  }
+
   const inputLines = rawInput.replace(/\r\n/g, '\n').split('\n');
   let inputIndex = 0;
   const outputChunks: string[] = [];
@@ -789,8 +1135,107 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
 
     const indentStack: number[] = [0];
 
+    const expandSingleChainedComparison = (clause: string): string => {
+      const operands: string[] = [];
+      const ops: string[] = [];
+      let pDepth = 0;
+      let bDepth = 0;
+      let cDepth = 0;
+      let inS = false;
+      let inD = false;
+      let lastIdx = 0;
+
+      for (let i = 0; i < clause.length; i++) {
+        const ch = clause[i];
+        if (ch === '\\' && (inS || inD)) {
+          i++;
+          continue;
+        }
+        if (ch === "'" && !inD) inS = !inS;
+        else if (ch === '"' && !inS) inD = !inD;
+        else if (!inS && !inD) {
+          if (ch === '(') pDepth++;
+          else if (ch === ')') pDepth = Math.max(0, pDepth - 1);
+          else if (ch === '[') bDepth++;
+          else if (ch === ']') bDepth = Math.max(0, bDepth - 1);
+          else if (ch === '{') cDepth++;
+          else if (ch === '}') cDepth = Math.max(0, cDepth - 1);
+          else if (pDepth === 0 && bDepth === 0 && cDepth === 0) {
+            const twoChar = clause.slice(i, i + 2);
+            if (twoChar === '<=' || twoChar === '>=' || twoChar === '==' || twoChar === '!=') {
+              operands.push(clause.slice(lastIdx, i).trim());
+              ops.push(twoChar);
+              i++;
+              lastIdx = i + 1;
+            } else if (
+              (ch === '<' || ch === '>') &&
+              clause[i - 1] !== ch &&
+              clause[i + 1] !== ch &&
+              clause[i + 1] !== '='
+            ) {
+              operands.push(clause.slice(lastIdx, i).trim());
+              ops.push(ch);
+              lastIdx = i + 1;
+            }
+          }
+        }
+      }
+      if (ops.length >= 2) {
+        operands.push(clause.slice(lastIdx).trim());
+        if (operands.every(Boolean)) {
+          const pairs: string[] = [];
+          for (let k = 0; k < ops.length; k++) {
+            pairs.push(`(${operands[k]} ${ops[k]} ${operands[k + 1]})`);
+          }
+          return `(${pairs.join(' and ')})`;
+        }
+      }
+      return clause;
+    };
+
+    const expandChainedComparisons = (inputExpr: string): string => {
+      if (inputExpr.startsWith('[')) return inputExpr;
+      // Split by top-level 'and' / 'or'
+      const parts: string[] = [];
+      let pDepth = 0;
+      let bDepth = 0;
+      let cDepth = 0;
+      let inS = false;
+      let inD = false;
+      let lastIdx = 0;
+      for (let i = 0; i < inputExpr.length; i++) {
+        const ch = inputExpr[i];
+        if (ch === '\\' && (inS || inD)) {
+          i++;
+          continue;
+        }
+        if (ch === "'" && !inD) inS = !inS;
+        else if (ch === '"' && !inS) inD = !inD;
+        else if (!inS && !inD) {
+          if (ch === '(') pDepth++;
+          else if (ch === ')') pDepth = Math.max(0, pDepth - 1);
+          else if (ch === '[') bDepth++;
+          else if (ch === ']') bDepth = Math.max(0, bDepth - 1);
+          else if (ch === '{') cDepth++;
+          else if (ch === '}') cDepth = Math.max(0, cDepth - 1);
+          else if (pDepth === 0 && bDepth === 0 && cDepth === 0) {
+            const rest = inputExpr.slice(i);
+            const logicMatch = rest.match(/^(and|or)\b/);
+            if (logicMatch && (i === 0 || /\s/.test(inputExpr[i - 1]))) {
+              parts.push(expandSingleChainedComparison(inputExpr.slice(lastIdx, i)));
+              parts.push(` ${logicMatch[1]} `);
+              i += logicMatch[1].length - 1;
+              lastIdx = i + 1;
+            }
+          }
+        }
+      }
+      parts.push(expandSingleChainedComparison(inputExpr.slice(lastIdx)));
+      return parts.join('');
+    };
+
     const transformExpr = (expr: string): string => {
-      let e = expr.trim();
+      let e = expandChainedComparisons(expr.trim());
 
       // Handle Python f-strings: f"..." or f'...'
       e = e.replace(/\bf"([^"]*)"/g, (_, inner) => {
@@ -1209,9 +1654,19 @@ export function runPythonCode(code: string, rawInput: string): { stdout: string;
 
     return { stdout: outputChunks.join('').trim() };
   } catch (err) {
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    let formattedErr = rawMsg;
+    if (err instanceof ReferenceError || /is not defined/i.test(rawMsg)) {
+      const varMatch = rawMsg.match(/([a-zA-Z_]\w*)\s+is not defined/);
+      formattedErr = varMatch
+        ? `NameError: name '${varMatch[1]}' is not defined — Biến hoặc câu lệnh '${varMatch[1]}' chưa được định nghĩa hợp lệ trong Python 3.`
+        : `NameError: ${rawMsg}`;
+    } else if (err instanceof SyntaxError && !rawMsg.startsWith('SyntaxError:')) {
+      formattedErr = `SyntaxError: invalid syntax (${rawMsg})`;
+    }
     return {
-      stdout: outputChunks.join('').trim(),
-      error: err instanceof Error ? err.message : String(err),
+      stdout: '',
+      error: formattedErr,
     };
   }
 }
@@ -1712,8 +2167,12 @@ export function executeAndGrade(problem: Problem, userCode: string): ExecutionRe
 
     const passedCount = testResults.filter((r) => r.passed).length;
     const totalCount = testResults.length || 1;
-    const passedAll = passedCount === totalCount && totalCount > 0;
-    const score = Math.round((passedCount / totalCount) * problem.xpReward);
+    const passedAll = passedCount === totalCount && totalCount > 0 && fatalErrors.length === 0;
+    const score = passedAll ? problem.xpReward : Math.round((passedCount / totalCount) * problem.xpReward);
+
+    if (fatalErrors.length > 0 && !combinedStdout) {
+      combinedStdout = `[Lỗi cú pháp dòng ${fatalErrors[0].line}]: ${fatalErrors[0].message}`;
+    }
 
     return {
       passedAll,
@@ -1859,7 +2318,13 @@ export function getLiveCommandOutput(
         liveOutput: `[Lỗi thực thi]: ${error}`,
       };
     }
-    const singleLineOut = stdout ? stdout.replace(/\n/g, ' ↵ ') : '(Đã thực thi — chưa có lệnh print() xuất ra màn hình)';
+    if (!stdout) {
+      return {
+        currentStatement,
+        liveOutput: '(Chưa có dữ liệu xuất ra — hãy dùng lệnh print(...) để in kết quả)',
+      };
+    }
+    const singleLineOut = stdout.replace(/\n/g, ' ↵ ');
     return {
       currentStatement,
       liveOutput: sampleInput

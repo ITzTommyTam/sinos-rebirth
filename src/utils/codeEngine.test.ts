@@ -392,5 +392,71 @@ test('Multi-participant Meet: mergeRoomParticipants deduplicates peers and selec
   assert.equal(dismissedSpotlight, null);
 });
 
+test('Python 3 strict syntax: rejects comma-grouped conditions like `if a,b,c >=1 and a,b,c <= 10**6:` and prevents fake input/output or passing grade', () => {
+  const pyProb = INITIAL_PROBLEMS.find((p) => p.language === 'python')!;
+  const invalidCode = [
+    'a, b, c = map(int, input().split())',
+    'if a,b,c >=1 and a,b,c <= 10**6:',
+    '    print(a + b + c)',
+  ].join('\n');
 
+  const diags = analyzeSyntax(invalidCode, 'python');
+  const syntaxErrors = diags.filter((d) => d.severity === 'error');
+  assert.equal(syntaxErrors.length > 0, true);
+  assert.equal(syntaxErrors[0].line, 2);
+  assert.equal(syntaxErrors[0].message.includes('SyntaxError: invalid syntax'), true);
+
+  // Must not execute or return stdout
+  const execRes = runPythonCode(invalidCode, '3 4 5');
+  assert.equal(execRes.stdout, '');
+  assert.equal(Boolean(execRes.error && execRes.error.includes('SyntaxError: invalid syntax')), true);
+
+  // Live command output must show error and NEVER show [Input mẫu: ...]
+  const liveInfo = getLiveCommandOutput(pyProb, invalidCode, invalidCode.length);
+  assert.equal(liveInfo.liveOutput.startsWith('[Lỗi dòng 2]'), true);
+  assert.equal(liveInfo.liveOutput.includes('[Input mẫu:'), false);
+
+  // Grading must fail with 0 passed tests and 0 score
+  const gradeReport = executeAndGrade(pyProb, invalidCode);
+  assert.equal(gradeReport.passedAll, false);
+  assert.equal(gradeReport.passedCount, 0);
+  assert.equal(gradeReport.score, 0);
+
+  // Valid Python 3 chained comparison must work properly
+  const validChainedCode = [
+    'a, b, c = map(int, input().split())',
+    'if 1 <= a <= 10**6 and 1 <= b <= 10**6 and 1 <= c <= 10**6:',
+    '    print(a + b + c)',
+  ].join('\n');
+  assert.deepEqual(analyzeSyntax(validChainedCode, 'python'), []);
+  const validExec = runPythonCode(validChainedCode, '10 20 30');
+  assert.equal(validExec.error, undefined);
+  assert.equal(validExec.stdout, '60');
+  const outOfRangeExec = runPythonCode(validChainedCode, '0 20 30');
+  assert.equal(outOfRangeExec.stdout, '');
+
+  // Parenthesized tuple `if (a,b,c) >= 1:` must also be rejected and suggest `if (a and b and c) >= 1:`
+  const tupleCompareCode = [
+    'a, b, c = map(int, input().split())',
+    'if (a,b,c) >= 1:',
+    '    print(a + b + c)',
+  ].join('\n');
+  const tupleDiags = analyzeSyntax(tupleCompareCode, 'python');
+  assert.equal(tupleDiags.some((d) => d.severity === 'error'), true);
+  assert.equal(
+    tupleDiags.some((d) => d.suggestion.includes('if (a and b and c) >= 1:')),
+    true
+  );
+
+  // `if (a and b and c) >= 1 and (a and b and c) <= 10**6:` must be valid and execute cleanly
+  const groupedAndCode = [
+    'a, b, c = map(int, input().split())',
+    'if (a and b and c) >= 1 and (a and b and c) <= 10**6:',
+    '    print(a + b + c)',
+  ].join('\n');
+  assert.deepEqual(analyzeSyntax(groupedAndCode, 'python'), []);
+  const groupedAndExec = runPythonCode(groupedAndCode, '10 20 30');
+  assert.equal(groupedAndExec.error, undefined);
+  assert.equal(groupedAndExec.stdout, '60');
+});
 
